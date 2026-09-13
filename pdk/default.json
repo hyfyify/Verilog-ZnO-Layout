@@ -1,0 +1,22 @@
+{
+  "description": "Conservative demonstrator rules; replace with measured process data",
+  "units": "micrometre",
+  "grid_um": 10,
+  "min_width_um": 80,
+  "min_spacing_um": 80,
+  "cell_width_um": 900,
+  "cell_height_um": 700,
+  "row_spacing_um": 250,
+  "canvas_width_um": 8128,
+  "canvas_height_um": 6096,
+  "image_width_px": 1280,
+  "image_height_px": 960,
+  "layers": ["zno", "source_drain", "electrolyte", "gate", "metal1"],
+  "colors": {
+    "zno": "#4ea5ff",
+    "source_drain": "#d8d8d8",
+    "electrolyte": "#7edc78",
+    "gate": "#ffb347",
+    "metal1": "#d85cff"
+  }
+}
