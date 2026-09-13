@@ -9,8 +9,9 @@ An experimental, measurement-driven compiler that converts synthesizable Verilog
 - Uses Yosys for synthesis when it is installed.
 - Falls back to a small parser for combinational `assign` expressions using `~`, `&`, `|`, and `^`.
 - Maps gates to parameterized ZnO TFT cell drawings.
-- Places cells and creates simple Manhattan metal routing.
-- Checks minimum feature width and canvas bounds.
+- Places cells and creates simple Manhattan metal routing, including top-level output pads.
+- Uses one configurable print width for ZnO, silver source/drain, electrolyte, and gate features.
+- Checks minimum feature width, canvas bounds, missing drivers, and source-to-sink route continuity.
 - Exports an interactive SVG preview, JSON placed netlist, DRC text report, and one 1280×960 monochrome PNG per process layer.
 - Uses only the Python standard library at runtime.
 

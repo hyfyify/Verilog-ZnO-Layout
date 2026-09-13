@@ -46,4 +46,5 @@ class Layout:
     shapes: list[Rect]
     pins: dict[str, tuple[int, int]]
     gate_count: int
-
+    routes: list[tuple[str, tuple[int, int], tuple[int, int]]] = field(default_factory=list)
+    unrouted: list[str] = field(default_factory=list)
