@@ -126,7 +126,7 @@ def _cell_shapes(gate: Gate, pdk: PDK) -> tuple[list[Rect], dict[str, tuple[int,
 def _astar_grid(
     start: tuple[int, int], goal: tuple[int, int], width: int, height: int,
     blocked: set[tuple[int, int]], occupied: dict[tuple[int, int], str], net: str,
-    clearance: int = 1, max_expansions: int = 10_000,
+    clearance: int = 1, max_expansions: int = 6_000,
 ) -> list[tuple[int, int]] | None:
     """Shortest four-neighbour route. Manhattan heuristic preserves optimality."""
     forbidden: set[tuple[int, int]] = set()
@@ -313,7 +313,7 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     # occupied when all lower legal planes fail, keeping ordinary designs
     # compressed to the smallest practical layer count.
     routing_layers = tuple(
-        f"metal{index}" for index in range(2, 13)
+        f"metal{index}" for index in range(2, 25)
         if f"metal{index}" in pdk.layers
     )
     occupied_by_layer: dict[str, dict[tuple[int, int], str]] = {
