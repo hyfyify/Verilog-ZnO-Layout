@@ -6,7 +6,7 @@ from pathlib import Path
 from .export import write_masks, write_netlist, write_svg
 from .layout import place_and_route, run_drc
 from .pdk import PDK
-from .techmap import expand_to_nmos_primitives
+from .techmap import expand_to_nmos_primitives, prune_unused_logic
 from .verilog import run_yosys
 from .electrical import SynthesisError, validate_and_adapt
 
@@ -15,6 +15,7 @@ def compile_design(source: Path, output: Path, pdk_path: Path, top: str | None =
     pdk = PDK.load(pdk_path)
     logical = run_yosys(source, top)
     validate_and_adapt(logical, pdk)
+    prune_unused_logic(logical)
     netlist = expand_to_nmos_primitives(logical)
     layout = place_and_route(netlist, pdk)
     errors = run_drc(layout, pdk)
@@ -23,7 +24,17 @@ def compile_design(source: Path, output: Path, pdk_path: Path, top: str | None =
     for stale in [output / "layout.svg", *output.glob("mask_*.png")]:
         stale.unlink(missing_ok=True)
     write_netlist(netlist, output / "netlist.json")
-    report = ["ZnO Layout DRC", "================", f"Gate count: {layout.gate_count}"]
+    used_metals = sorted(
+        {shape.layer for shape in layout.shapes if shape.layer.startswith("metal")},
+        key=lambda name: int(name.removeprefix("metal")),
+    )
+    highest_metal = used_metals[-1] if used_metals else "none"
+    report = [
+        "ZnO Layout DRC", "================",
+        f"Gate count: {layout.gate_count}",
+        f"Routing layers used: {', '.join(used_metals) or 'none'}",
+        f"Highest routing layer: {highest_metal}",
+    ]
     report += [f"Errors: {len(errors)}", ""] + (errors or ["PASS"])
     (output / "drc_report.txt").write_text("\n".join(report) + "\n", encoding="utf-8")
     if not errors:

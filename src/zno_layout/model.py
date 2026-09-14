@@ -54,6 +54,8 @@ class PackageDescriptor:
 
     def pin_position(self, number: int) -> tuple[str, int]:
         """Project convention: DIP pin 1 is upper-right, then clockwise."""
+        if self.name.startswith("DIE"):
+            return ("PERIMETER", number)
         half = self.pin_count // 2
         if self.name.startswith("DIP"):
             return ("RIGHT", number - 1) if number <= half else ("LEFT", self.pin_count - number)

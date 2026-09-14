@@ -3,6 +3,25 @@ from __future__ import annotations
 from .model import Gate, Netlist
 
 
+
+def prune_unused_logic(netlist: Netlist) -> Netlist:
+    """Remove gates that cannot affect a declared output or required driver.
+
+    This is a conservative backwards reachability pass. RRAM descriptors,
+    package pins, power rails and electrical components are metadata/physical
+    side effects and are retained unchanged.
+    """
+    required = set(netlist.outputs)
+    required.update(component.output_net for component in netlist.electrical_components)
+    kept_reversed: list[Gate] = []
+    for gate in reversed(netlist.gates):
+        if gate.output in required:
+            kept_reversed.append(gate)
+            required.update(gate.inputs)
+    netlist.gates = list(reversed(kept_reversed))
+    return netlist
+
+
 def expand_to_nmos_primitives(netlist: Netlist) -> Netlist:
     """Expand Boolean gates into cascadable NOT/NAND/NOR weak-load NMOS cells."""
     result: list[Gate] = []
