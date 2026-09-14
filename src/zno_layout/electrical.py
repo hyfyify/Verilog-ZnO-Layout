@@ -32,7 +32,7 @@ def _args(text: str) -> dict[str, str]:
     return result
 
 
-PACKAGE = re.compile(r"\bpackage\s+(DIP|PLCC)(\d+)\s*\((.*?)\)\s*;", re.I | re.S)
+PACKAGE = re.compile(r"\bpackage\s+(DIP|PLCC|DIE)(\d+)\s*\((.*?)\)\s*;", re.I | re.S)
 PIN = re.compile(r"\bpin\s+(\w+)\s*\((.*?)\)\s*;", re.I | re.S)
 POWER = re.compile(r"\bpower\s+(\w+)\s*\((.*?)\)\s*;", re.I | re.S)
 DRIVE = re.compile(r"\bdrive\s+(\w+)\s*->\s*(\w+)\s*\((.*?)\)\s*;", re.I | re.S)
@@ -81,7 +81,9 @@ def validate_and_adapt(netlist: Netlist, pdk) -> None:
     if package:
         seen = set()
         for pin in pins:
-            if not 1 <= pin.number <= package.pin_count:
+            first_pin = 0 if package.name.startswith("DIE") else 1
+            last_pin = package.pin_count - 1 if first_pin == 0 else package.pin_count
+            if not first_pin <= pin.number <= last_pin:
                 raise SynthesisError(f"E_PIN_RANGE {package.name} cannot use PIN={pin.number}")
             if pin.number in seen:
                 raise SynthesisError(f"E_PIN_DUPLICATE PIN={pin.number}")
