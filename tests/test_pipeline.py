@@ -11,7 +11,7 @@ from zno_layout.layout import _astar_grid, _cell_shapes, _touches, place_and_rou
 from zno_layout.layout import _rram_shapes
 from zno_layout.model import Gate
 from zno_layout.pdk import PDK
-from zno_layout.techmap import expand_to_nmos_primitives
+from zno_layout.techmap import expand_to_nmos_primitives, prune_unused_logic
 from zno_layout.verilog import parse_assign_verilog, run_yosys
 
 
@@ -230,6 +230,26 @@ class PipelineTests(unittest.TestCase):
         shorts = [(a.label, b.label) for index, a in enumerate(shapes)
                   for b in shapes[index + 1:] if a.label != b.label and _touches(a, b)]
         self.assertEqual(shorts, [])
+
+
+    def test_unused_logic_is_absent_from_tft_layout(self):
+        design = parse_assign_verilog(
+            "module m(input wire a, input wire b, output wire y); "
+            "wire dead; assign dead = a & b; assign y = ~a; endmodule"
+        )
+        before = len(design.gates)
+        prune_unused_logic(design)
+        self.assertLess(len(design.gates), before)
+        self.assertNotIn("dead", {gate.output for gate in design.gates})
+        mapped = expand_to_nmos_primitives(design)
+        self.assertFalse(any(
+            gate.output == "dead" or "dead" in gate.inputs
+            for gate in mapped.gates
+        ))
+        pdk = PDK.load(ROOT / "pdk/default.json")
+        layout = place_and_route(mapped, pdk)
+        self.assertFalse(any(shape.label == "dead" for shape in layout.shapes))
+        self.assertEqual(run_drc(layout, pdk), [])
 
     def test_die_pin_zero_and_alu8_stress(self):
         pdk = PDK.load(ROOT / "pdk/default.json")
