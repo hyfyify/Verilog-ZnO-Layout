@@ -40,6 +40,14 @@
     "metal7",
     "via78",
     "metal8",
+    "via89",
+    "metal9",
+    "via910",
+    "metal10",
+    "via1011",
+    "metal11",
+    "via1112",
+    "metal12",
     "rram_x",
     "rram_zno",
     "rram_y",
@@ -74,6 +82,14 @@
     "via67": "#ffcc80",
     "metal7": "#26c6da",
     "via78": "#ef9a9a",
-    "metal8": "#78909c"
+    "metal8": "#78909c",
+    "via89": "#eeeeee",
+    "metal9": "#5c6bc0",
+    "via910": "#eeeeee",
+    "metal10": "#66bb6a",
+    "via1011": "#eeeeee",
+    "metal11": "#ec407a",
+    "via1112": "#eeeeee",
+    "metal12": "#ffa726"
   }
 }
