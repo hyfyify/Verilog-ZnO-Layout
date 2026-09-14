@@ -290,7 +290,18 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
 
     # Reserve continuous power trunks first; signal nets can use the alternate
     # routing plane when crossing a rail.
-    pending.sort(key=lambda item: item[0] not in {"$VDD", "$GND"})
+    # Route power and high-fanout/long-span nets first. Scarce channels must be
+    # reserved for the nets that are hardest to detour; small local nets can
+    # normally use the remaining capacity.
+    fanout: dict[str, int] = {}
+    for net, _ in pending:
+        fanout[net] = fanout.get(net, 0) + 1
+    pending.sort(key=lambda item: (
+        0 if item[0] in {"$VDD", "$GND"} else 1,
+        -fanout[item[0]],
+        -(abs(net_sources.get(item[0], item[1])[0] - item[1][0])
+          + abs(net_sources.get(item[0], item[1])[1] - item[1][1])),
+    ))
 
     grid_width, grid_height = pdk.image_width_px, pdk.image_height_px
     blocked: set[tuple[int, int]] = set()
@@ -298,7 +309,13 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         for gx in range(int(x1 / pixel) + 1, int(x2 / pixel) - 1):
             for gy in range(int(y1 / pixel) + 1, int(y2 / pixel) - 1):
                 blocked.add((gx, gy))
-    routing_layers = ("metal2", "metal3", "metal4")
+    # Metal2 is preferred. Higher planes are overflow capacity and are only
+    # occupied when all lower legal planes fail, keeping ordinary designs
+    # compressed to the smallest practical layer count.
+    routing_layers = tuple(
+        f"metal{index}" for index in range(2, 9)
+        if f"metal{index}" in pdk.layers
+    )
     occupied_by_layer: dict[str, dict[tuple[int, int], str]] = {
         layer: {} for layer in routing_layers
     }
@@ -315,9 +332,9 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         if preferred:
             candidates = (preferred,) + tuple(layer for layer in routing_layers if layer != preferred)
         elif net == "$VDD":
-            candidates = ("metal2", "metal3")
+            candidates = routing_layers
         elif net == "$GND":
-            candidates = ("metal3", "metal2")
+            candidates = tuple(reversed(routing_layers))
         else:
             candidates = routing_layers
         path = None
@@ -348,11 +365,8 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         # existing same-net tree need only the destination via.
         via_points = [goal_grid] if chosen_source != source else [start_grid, goal_grid]
         for vx, vy in via_points:
-            via_layers = {
-                "metal2": ("via12",),
-                "metal3": ("via12", "via23"),
-                "metal4": ("via12", "via23", "via34"),
-            }[chosen_layer]
+            target_level = int(chosen_layer.removeprefix("metal"))
+            via_layers = tuple(f"via{level}{level + 1}" for level in range(1, target_level))
             for via_layer in via_layers:
                 shapes.append(Rect(via_layer, vx * pixel, vy * pixel,
                                    (vx + 1) * pixel, (vy + 1) * pixel, net))
@@ -376,8 +390,12 @@ def _touches(a: Rect, b: Rect) -> bool:
     return a.x1 <= b.x2 and b.x1 <= a.x2 and a.y1 <= b.y2 and b.y1 <= a.y2
 
 
+def layout_layer_names(layout: Layout) -> set[str]:
+    return {shape.layer for shape in layout.shapes}
+
+
 def _route_is_connected(layout: Layout, net: str, source: tuple[int, int], sink: tuple[int, int]) -> bool:
-    conductors = {"metal1", "via12", "metal2", "via23", "metal3", "via34", "metal4"}
+    conductors = {layer for layer in layout_layer_names(layout) if layer.startswith(("metal", "via"))}
     shapes = [shape for shape in layout.shapes if shape.layer in conductors and shape.label == net]
     frontier = [index for index, shape in enumerate(shapes) if _contains(shape, source)]
     visited = set(frontier)
@@ -413,7 +431,7 @@ def run_drc(layout: Layout, pdk: PDK) -> list[str]:
         if not _route_is_connected(layout, net, source, sink):
             errors.append(f"E_CONNECT {net}: {source} does not reach {sink}")
     route_nets = {net for net, _, _ in layout.routes}
-    route_layers = {"metal1", "via12", "metal2", "via23", "metal3", "via34", "metal4"}
+    route_layers = {layer for layer in known_layers if layer.startswith(("metal", "via"))}
     route_shapes = [s for s in layout.shapes if s.layer in route_layers and s.label in route_nets]
     for index, first in enumerate(route_shapes):
         for second in route_shapes[index + 1:]:
