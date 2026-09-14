@@ -199,6 +199,29 @@ def _path_rects(path: list[tuple[int, int]], pixel: float, net: str,
     return result
 
 
+def _die_pin_point(number: int, count: int, pdk: PDK) -> tuple[float, float]:
+    """Uniform clockwise perimeter placement; DIE pin 0 is top-centre."""
+    width, height = pdk.image_width_px, pdk.image_height_px
+    top_half = width // 2 - 1
+    vertical = height - 2
+    horizontal = width - 2
+    perimeter = 2 * horizontal + 2 * vertical
+    distance = number * perimeter / count
+    if distance <= top_half:
+        gx, gy = width // 2 + distance, 0
+    elif distance <= top_half + vertical:
+        gx, gy = width - 1, distance - top_half
+    elif distance <= top_half + vertical + horizontal:
+        gx, gy = width - 1 - (distance - top_half - vertical), height - 1
+    elif distance <= top_half + 2 * vertical + horizontal:
+        gx, gy = 0, height - 1 - (distance - top_half - vertical - horizontal)
+    else:
+        gx, gy = distance - top_half - 2 * vertical - horizontal, 0
+    gx, gy = round(gx), round(gy)
+    pixel = pdk.pixel_pitch_um
+    return ((gx + 0.5) * pixel, (gy + 0.5) * pixel)
+
+
 def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     pixel = pdk.pixel_pitch_um
     margin = 2 * pixel
@@ -232,12 +255,28 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         pending.append(("$GND", local_pins["gnd"]))
         net_sources[gate.output] = local_pins["out"]
 
+    package_points: dict[str, tuple[float, float]] = {}
+    if netlist.package and netlist.package.name.startswith("DIE"):
+        for pin in netlist.pin_descriptors:
+            point = _die_pin_point(pin.number, netlist.package.pin_count, pdk)
+            package_points[pin.signal] = point
+            gx, gy = int(point[0] // pixel), int(point[1] // pixel)
+            shapes.append(Rect("metal1", gx * pixel, gy * pixel,
+                               (gx + 1) * pixel, (gy + 1) * pixel,
+                               f"PIN{pin.number}:{pin.signal}"))
+
     input_pitch = max(pdk.min_spacing_um + pdk.min_width_um, pdk.canvas_height_um // (len(netlist.inputs) + 1))
     for index, name in enumerate(netlist.inputs):
         y = min(pdk.canvas_height_um - pixel / 2, (index + 1) * input_pitch)
-        net_sources[name] = (pixel / 2, math.floor(y / pixel) * pixel + pixel / 2)
+        net_sources[name] = package_points.get(
+            name, (pixel / 2, math.floor(y / pixel) * pixel + pixel / 2))
     net_sources["$VDD"] = (pixel / 2, pixel / 2)
     net_sources["$GND"] = (pixel / 2, pdk.canvas_height_um - pixel / 2)
+    for pin in netlist.pin_descriptors:
+        if pin.kind == "POWER" and pin.signal in package_points:
+            net_sources["$VDD"] = package_points[pin.signal]
+        elif pin.kind == "GND" and pin.signal in package_points:
+            net_sources["$GND"] = package_points[pin.signal]
 
     # Every top-level output receives a physical route to a pad at the right edge.
     for index, name in enumerate(netlist.outputs):
@@ -245,7 +284,9 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
             pdk.canvas_height_um - pdk.min_width_um,
             (index + 1) * pdk.canvas_height_um // (len(netlist.outputs) + 1),
         )
-        pending.append((name, (pdk.canvas_width_um - pixel / 2, math.floor(output_y / pixel) * pixel + pixel / 2)))
+        pending.append((name, package_points.get(
+            name, (pdk.canvas_width_um - pixel / 2,
+                   math.floor(output_y / pixel) * pixel + pixel / 2))))
 
     # Reserve continuous power trunks first; signal nets can use the alternate
     # routing plane when crossing a rail.
