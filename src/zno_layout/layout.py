@@ -126,7 +126,7 @@ def _cell_shapes(gate: Gate, pdk: PDK) -> tuple[list[Rect], dict[str, tuple[int,
 def _astar_grid(
     start: tuple[int, int], goal: tuple[int, int], width: int, height: int,
     blocked: set[tuple[int, int]], occupied: dict[tuple[int, int], str], net: str,
-    clearance: int = 1, max_expansions: int = 50_000,
+    clearance: int = 1, max_expansions: int = 10_000,
 ) -> list[tuple[int, int]] | None:
     """Shortest four-neighbour route. Manhattan heuristic preserves optimality."""
     forbidden: set[tuple[int, int]] = set()
