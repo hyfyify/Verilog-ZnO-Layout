@@ -12,7 +12,7 @@ from zno_layout.layout import _rram_shapes
 from zno_layout.model import Gate
 from zno_layout.pdk import PDK
 from zno_layout.techmap import expand_to_nmos_primitives
-from zno_layout.verilog import parse_assign_verilog
+from zno_layout.verilog import parse_assign_verilog, run_yosys
 
 
 ROOT = Path(__file__).parents[1]
@@ -230,6 +230,21 @@ class PipelineTests(unittest.TestCase):
         shorts = [(a.label, b.label) for index, a in enumerate(shapes)
                   for b in shapes[index + 1:] if a.label != b.label and _touches(a, b)]
         self.assertEqual(shorts, [])
+
+    def test_die_pin_zero_and_alu8_stress(self):
+        pdk = PDK.load(ROOT / "pdk/default.json")
+        design = run_yosys(ROOT / "examples/alu4_8op.txt")
+        validate_and_adapt(design, pdk)
+        self.assertEqual(design.package.name, "DIE24")
+        self.assertEqual(design.package.pin_position(0), ("PERIMETER", 0))
+        mapped = expand_to_nmos_primitives(design)
+        layout = place_and_route(mapped, pdk)
+        pin0 = layout.pins["A0"]
+        self.assertTrue(math.isclose(pin0[0], pdk.canvas_width_um / 2 + pdk.pixel_pitch_um / 2,
+                                     abs_tol=pdk.pixel_pitch_um))
+        self.assertTrue(math.isclose(pin0[1], pdk.pixel_pitch_um / 2,
+                                     abs_tol=1e-6))
+        self.assertEqual(run_drc(layout, pdk), [])
 
 
 if __name__ == "__main__":
