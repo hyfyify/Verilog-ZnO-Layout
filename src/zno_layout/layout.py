@@ -313,7 +313,7 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     # occupied when all lower legal planes fail, keeping ordinary designs
     # compressed to the smallest practical layer count.
     routing_layers = tuple(
-        f"metal{index}" for index in range(2, 9)
+        f"metal{index}" for index in range(2, 13)
         if f"metal{index}" in pdk.layers
     )
     occupied_by_layer: dict[str, dict[tuple[int, int], str]] = {
