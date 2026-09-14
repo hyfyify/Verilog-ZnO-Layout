@@ -1,0 +1,85 @@
+{
+  "TFT": {
+    "v_abs_min": -2.5,
+    "v_abs_max": 3.3,
+    "vgs_max": 2.5,
+    "vds_max": 2.5
+  },
+  "LEVEL_SHIFTER_UP": {
+    "implementation": "physical ZnO TFT high-side level shifter",
+    "tft_count": 4,
+    "transistor_network": [
+      {"name": "INPUT", "D": "N1", "G": "A", "S": "GND"},
+      {"name": "PULLUP", "D": "HV", "G": "N1", "S": "Y"},
+      {"name": "KEEPER", "D": "HV", "G": "HV", "S": "N1"},
+      {"name": "OUTPUT", "D": "Y", "G": "N1", "S": "GND"}
+    ]
+  },
+  "BIAS_DRIVER": {
+    "implementation": "measured TFT divider followed by isolating buffer",
+    "tft_count": 4,
+    "measured_ids_model": false
+  },
+  "BUF": {
+    "verilog": ["assign Y = A"],
+    "yosys_cells": ["$_BUF_"],
+    "implementation": "NOT + NOT",
+    "tft_count": 4
+  },
+  "NOT": {
+    "verilog": ["assign Y = ~A"],
+    "yosys_cells": ["$_NOT_"],
+    "implementation": "enhancement load TFT from VDD to Y plus input-controlled pull-down TFT from Y to GND",
+    "tft_count": 2,
+    "transistor_network": [
+      {"name": "LOAD", "D": "VDD", "G": "VDD", "S": "Y"},
+      {"name": "PULLDOWN", "D": "Y", "G": "A", "S": "GND"}
+    ]
+  },
+  "NAND": {
+    "verilog": ["assign Y = ~(A & B)"],
+    "yosys_cells": ["$_NAND_"],
+    "implementation": "one weak load + two series pull-down TFTs; layout primitive",
+    "tft_count": 3,
+    "transistor_network": [
+      {"name": "LOAD", "D": "VDD", "G": "VDD", "S": "Y"},
+      {"name": "PULLDOWN_A", "D": "Y", "G": "A", "S": "N1"},
+      {"name": "PULLDOWN_B", "D": "N1", "G": "B", "S": "GND"}
+    ]
+  },
+  "NOR": {
+    "verilog": ["assign Y = ~(A | B)"],
+    "yosys_cells": ["$_NOR_"],
+    "implementation": "one weak load + two parallel pull-down TFTs; layout primitive",
+    "tft_count": 3,
+    "transistor_network": [
+      {"name": "LOAD", "D": "VDD", "G": "VDD", "S": "Y"},
+      {"name": "PULLDOWN_A", "D": "Y", "G": "A", "S": "GND"},
+      {"name": "PULLDOWN_B", "D": "Y", "G": "B", "S": "GND"}
+    ]
+  },
+  "AND": {
+    "verilog": ["assign Y = A & B"],
+    "yosys_cells": ["$_AND_"],
+    "implementation": "NAND + NOT",
+    "tft_count": 5
+  },
+  "OR": {
+    "verilog": ["assign Y = A | B"],
+    "yosys_cells": ["$_OR_"],
+    "implementation": "NOR + NOT",
+    "tft_count": 5
+  },
+  "XOR": {
+    "verilog": ["assign Y = A ^ B"],
+    "yosys_cells": ["$_XOR_"],
+    "implementation": "four cascaded NAND cells",
+    "tft_count": 12
+  },
+  "XNOR": {
+    "verilog": ["assign Y = ~(A ^ B)"],
+    "yosys_cells": ["$_XNOR_"],
+    "implementation": "XOR + NOT",
+    "tft_count": 14
+  }
+}

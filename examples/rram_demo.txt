@@ -1,0 +1,16 @@
+package DIP14(required="1,2,3,7,14");
+pin a(PIN=1, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin b(PIN=2, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin y(PIN=3, TYPE=OUTPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin GND(PIN=7, TYPE=GND, V_RANGE="0~0V", NOMINAL=0V);
+pin VDD(PIN=14, TYPE=POWER, V_RANGE="0.75~0.85V", NOMINAL=0.8V);
+voltage core(vdd=0.8, high=0.5, low=0.1);
+rram config[31:0](stack="X/ZnO/Y", read=0.1, set=2.0, reset=-2.0);
+
+module rram_demo(
+    input wire a,
+    input wire b,
+    output wire y
+);
+    assign y = ~(a & b);
+endmodule

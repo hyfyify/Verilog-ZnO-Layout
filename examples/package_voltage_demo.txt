@@ -1,0 +1,14 @@
+package DIP14(required="1,2,3,7,14");
+pin cpu_out(PIN=1, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin y(PIN=2, TYPE=OUTPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin hv_control(PIN=3, TYPE=OUTPUT, V_RANGE="0~2V", LOGIC0="0~0.1V", LOGIC1="1.8~2V");
+pin GND(PIN=7, TYPE=GND, V_RANGE="0~0V", NOMINAL=0V);
+pin VDD33(PIN=14, TYPE=POWER, V_RANGE="3.2~3.4V", NOMINAL=3.3V);
+power CPU_08(VOLTAGE=0.8V, SOURCE=VDD33, PRIMITIVE=REGULATOR);
+power RRAM_WRITE_20(VOLTAGE=2V, SOURCE=VDD33, PRIMITIVE=REGULATOR);
+voltage cpu(vdd=0.8, high=0.7, low=0.1);
+drive cpu_out -> hv_control(SOURCE_LOW="0~0.1V", SOURCE_HIGH="0.7~0.8V",
+  TARGET_LOW="0~0.1V", TARGET_HIGH="1.8~2V", HIGH_RAIL=RRAM_WRITE_20);
+module package_voltage_demo(input wire cpu_out, output wire y);
+  assign y = ~cpu_out;
+endmodule

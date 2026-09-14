@@ -8,10 +8,12 @@ import tempfile
 from pathlib import Path
 
 from .model import Gate, Netlist
+from .extensions import parse_extensions
+from .electrical import parse_electrical
 
 
 CELL_KINDS = {
-    "$_NOT_": "NOT", "$_AND_": "AND", "$_OR_": "OR", "$_XOR_": "XOR",
+    "$_BUF_": "BUF", "$_NOT_": "NOT", "$_AND_": "AND", "$_OR_": "OR", "$_XOR_": "XOR",
     "$_NAND_": "NAND", "$_NOR_": "NOR", "$_XNOR_": "XNOR",
 }
 
@@ -48,20 +50,35 @@ def from_yosys_json(path: str | Path, top: str | None = None) -> Netlist:
 
 
 def run_yosys(verilog: str | Path, top: str | None = None) -> Netlist:
+    original = Path(verilog).read_text(encoding="utf-8")
+    electrical_cleaned, package, pins, rails, drives = parse_electrical(original)
+    cleaned, voltages, rrams = parse_extensions(electrical_cleaned)
     yosys = shutil.which("yosys")
     if not yosys:
-        return parse_assign_verilog(Path(verilog).read_text(encoding="utf-8"), top)
+        design = parse_assign_verilog(cleaned, top)
+        design.voltage_domains = voltages
+        design.rrams = rrams
+        design.package, design.pin_descriptors = package, pins
+        design.power_rails, design.drive_requests = rails, drives
+        return design
     with tempfile.TemporaryDirectory() as tmp:
+        cleaned_path = Path(tmp) / "input.v"
+        cleaned_path.write_text(cleaned, encoding="utf-8")
         output = Path(tmp) / "netlist.json"
         hierarchy = f"hierarchy -top {top};" if top else "hierarchy -auto-top;"
         script = (
-            f"read_verilog {Path(verilog).resolve()}; {hierarchy} proc; flatten; opt; "
+            f"read_verilog {cleaned_path}; {hierarchy} proc; flatten; opt; "
             f"techmap; opt; abc -g AND,OR,XOR,XNOR,NAND,NOR; clean; write_json {output}"
         )
         result = subprocess.run([yosys, "-q", "-p", script], text=True, capture_output=True)
         if result.returncode:
             raise RuntimeError(result.stderr.strip() or "Yosys synthesis failed")
-        return from_yosys_json(output, top)
+        design = from_yosys_json(output, top)
+        design.voltage_domains = voltages
+        design.rrams = rrams
+        design.package, design.pin_descriptors = package, pins
+        design.power_rails, design.drive_requests = rails, drives
+        return design
 
 
 TOKEN = re.compile(r"\s*(~|&|\||\^|\(|\)|[A-Za-z_][A-Za-z0-9_$]*)")

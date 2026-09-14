@@ -60,5 +60,31 @@ def write_netlist(netlist: Netlist, path: str | Path) -> None:
         "module": netlist.name, "inputs": netlist.inputs, "outputs": netlist.outputs,
         "gates": [{"kind": g.kind, "name": g.name, "inputs": g.inputs, "output": g.output,
                    "x_um": g.x, "y_um": g.y} for g in netlist.gates],
+        "voltage_domains": [
+            {"name": v.name, "vdd": v.vdd, "high": v.high, "low": v.low}
+            for v in netlist.voltage_domains
+        ],
+        "rram": [
+            {"name": r.name, "bits": r.bits, "stack": list(r.stack), "read_v": r.read_v,
+             "set_v": r.set_v, "reset_v": r.reset_v}
+            for r in netlist.rrams
+        ],
+        "package": ({"name": netlist.package.name, "pin_count": netlist.package.pin_count,
+                     "required_pins": list(netlist.package.required_pins)} if netlist.package else None),
+        "pins": [
+            {"signal": p.signal, "pin": p.number,
+             "position": netlist.package.pin_position(p.number) if netlist.package else None,
+             "type": p.kind, "v_range": [p.v_min, p.v_max],
+             "logic0": p.logic0, "logic1": p.logic1, "nominal": p.nominal}
+            for p in netlist.pin_descriptors
+        ],
+        "power_tree": [
+            {"rail": r.name, "voltage": r.voltage, "source": r.source, "primitive": r.primitive,
+             "boost": r.boost} for r in netlist.power_rails
+        ],
+        "electrical_components": [
+            {"kind": c.kind, "name": c.name, "input": c.input_net, "output": c.output_net,
+             "supply": c.supply} for c in netlist.electrical_components
+        ],
     }
     Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")

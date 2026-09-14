@@ -1,0 +1,21 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - run: python -m unittest discover -s tests -v
+      - run: zno-layout examples/inverter_chain.v -o build/inverter_chain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inverter-chain-masks
+          path: build/inverter_chain/
