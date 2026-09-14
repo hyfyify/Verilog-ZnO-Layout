@@ -132,6 +132,11 @@ def validate_and_adapt(netlist: Netlist, pdk) -> None:
                   max(request.source_high[0], request.target_high[0]) <=
                   min(request.source_high[1], request.target_high[1]))
         if direct:
+            # A direct-compatible drive is a net alias, not a physical TFT.
+            # Rewrite every logical sink so the routed source reaches it.
+            for gate in netlist.gates:
+                gate.inputs = [request.source if item == request.target else item
+                               for item in gate.inputs]
             netlist.electrical_components.append(ElectricalComponent(
                 "DIRECT", f"direct_{index}", request.source, request.target))
         elif target_high > source_high:
