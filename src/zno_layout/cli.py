@@ -6,7 +6,7 @@ from pathlib import Path
 from .export import write_masks, write_netlist, write_svg
 from .layout import place_and_route, run_drc
 from .pdk import PDK
-from .techmap import expand_to_nmos_primitives
+from .techmap import expand_to_nmos_primitives, prune_unused_logic
 from .verilog import run_yosys
 from .electrical import SynthesisError, validate_and_adapt
 
@@ -15,6 +15,7 @@ def compile_design(source: Path, output: Path, pdk_path: Path, top: str | None =
     pdk = PDK.load(pdk_path)
     logical = run_yosys(source, top)
     validate_and_adapt(logical, pdk)
+    prune_unused_logic(logical)
     netlist = expand_to_nmos_primitives(logical)
     layout = place_and_route(netlist, pdk)
     errors = run_drc(layout, pdk)
