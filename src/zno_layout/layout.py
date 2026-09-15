@@ -395,6 +395,28 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
                 chosen_source = ((trial_start[0] + 0.5) * pixel,
                                  (trial_start[1] + 0.5) * pixel)
                 break
+        # Coupling avoidance is an optimisation, never a reason to leave a
+        # legal net open. If every offset-aware trial exhausts its budget,
+        # retry low-to-high without the soft field before declaring failure.
+        if path is None:
+            for layer in candidates:
+                occupied = occupied_by_layer[layer]
+                trial_start = start_grid
+                same_net_tree = [point for point, owner in occupied.items() if owner == net]
+                if same_net_tree:
+                    trial_start = min(
+                        same_net_tree,
+                        key=lambda point: abs(point[0] - goal_grid[0]) + abs(point[1] - goal_grid[1]),
+                    )
+                trial = _astar_grid(
+                    trial_start, goal_grid, grid_width, grid_height,
+                    set(), occupied, net, clearance,
+                )
+                if trial is not None:
+                    path, chosen_layer = trial, layer
+                    chosen_source = ((trial_start[0] + 0.5) * pixel,
+                                     (trial_start[1] + 0.5) * pixel)
+                    break
         if path is None:
             unrouted.append(f"{net}: no p-grid path from {source} to {destination}")
             continue
@@ -412,6 +434,20 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         for point in path:
             occupied_by_layer[chosen_layer][point] = net
         routes.append((net, chosen_source, destination))
+
+    # The greedy tree router may revisit a branch endpoint. One physical via
+    # at one coordinate is sufficient for a net, so remove exact duplicates
+    # before DRC, mask export and parasitic extraction.
+    unique_shapes: list[Rect] = []
+    seen_vias: set[tuple[str, float, float, float, float, str]] = set()
+    for shape in shapes:
+        if shape.layer.startswith("via"):
+            key = (shape.layer, shape.x1, shape.y1, shape.x2, shape.y2, shape.label)
+            if key in seen_vias:
+                continue
+            seen_vias.add(key)
+        unique_shapes.append(shape)
+    shapes = unique_shapes
 
     rows = math.ceil(max(1, len(netlist.gates)) / per_row)
     used_height = margin + rows * (pdk.cell_height_um + pdk.row_spacing_um)
