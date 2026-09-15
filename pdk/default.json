@@ -148,5 +148,8 @@
   "max_bus_skew_p": 5000,
   "layer_activation_penalty": 25000,
   "via_penalty": 40,
-  "external_pad_size_um": 101.6
+  "external_pad_size_um": 101.6,
+  "max_routing_metal": 10,
+  "target_channel_utilization": 0.80,
+  "min_channel_utilization_before_layer": 0.60
 }
