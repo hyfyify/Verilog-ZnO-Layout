@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<title>ZnO Layout Mobile</title>
+<style>
+:root{color-scheme:dark;--bg:#090d14;--card:#111827;--line:#263244;--text:#f5f7fa;--muted:#9ca8ba;--cyan:#22d3ee;--red:#ff4d5f;--green:#43d17c}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#15243a 0,#090d14 34rem);color:var(--text);font:15px system-ui,-apple-system,"Noto Sans TC",sans-serif}
+header{position:sticky;top:0;z-index:5;padding:calc(12px + env(safe-area-inset-top)) 16px 12px;background:#090d14e8;backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800}.mark{width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,var(--red),var(--cyan));box-shadow:0 0 24px #22d3ee55}
+main{max-width:1100px;margin:auto;padding:16px 14px calc(30px + env(safe-area-inset-bottom));display:grid;gap:14px}.card{background:#111827e8;border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:0 14px 45px #0005}
+h1{font-size:19px;margin:0}.sub{font-size:12px;color:var(--muted);margin-top:2px}label{display:block;font-size:12px;color:var(--muted);margin:0 0 7px}
+textarea,input{width:100%;border:1px solid #344156;background:#080c13;color:#dffaff;border-radius:12px;padding:12px;font:13px ui-monospace,SFMono-Regular,Consolas,monospace;outline:none}
+textarea{height:43vh;min-height:260px;resize:vertical;line-height:1.5}input{height:44px;margin-bottom:10px}textarea:focus,input:focus{border-color:var(--cyan);box-shadow:0 0 0 3px #22d3ee22}
+.actions{display:grid;grid-template-columns:1fr auto;gap:9px;margin-top:11px}button{min-height:48px;border:0;border-radius:13px;padding:0 16px;font-weight:750;color:#071016;background:linear-gradient(135deg,#67e8f9,#22d3ee);touch-action:manipulation}
+button.secondary{color:var(--text);background:#202b3c;border:1px solid #344156}button:disabled{opacity:.5}.status{margin-top:10px;padding:10px 12px;border-radius:12px;background:#0b111c;color:var(--muted);white-space:pre-wrap}.status.ok{color:var(--green)}.status.bad{color:#ff8792}
+.tabs{display:flex;gap:7px;overflow:auto;margin-bottom:10px}.tabs button{min-height:38px;background:#202b3c;color:var(--muted);white-space:nowrap}.tabs button.active{background:#dffaff;color:#071016}
+.panel{display:none}.panel.active{display:block}.viewer{height:60vh;min-height:360px;border-radius:12px;overflow:hidden;background:white;border:1px solid #344156}.viewer iframe{width:100%;height:100%;border:0;touch-action:pan-x pan-y pinch-zoom}
+pre{margin:0;max-height:60vh;overflow:auto;background:#080c13;border-radius:12px;padding:12px;color:#d9e7f7;font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap}.downloads{display:flex;gap:8px;margin-top:10px}.downloads button{flex:1;background:#202b3c;color:var(--text)}
+@media(min-width:820px){main{grid-template-columns:minmax(350px,.8fr) minmax(450px,1.2fr);align-items:start}.card.results{position:sticky;top:86px}textarea{height:63vh}}
+</style>
+</head>
+<body>
+<header><div class="brand"><span class="mark"></span><div><h1>ZnO Layout Mobile</h1><div class="sub">Verilog → TFT → Routing → DRC → Mask</div></div></div></header>
+<main>
+<section class="card">
+<label for="top">Top module（可留空）</label><input id="top" placeholder="例如 alu4_8op">
+<label for="source">Verilog／ZnO 描述子</label>
+<textarea id="source" spellcheck="false">package DIE8(required="0,1,2,3");
+pin A(PIN=0, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin B(PIN=1, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin Y(PIN=2, TYPE=OUTPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin VDD08(PIN=3, TYPE=POWER, V_RANGE="0.8~0.8V", NOMINAL=0.8V);
+voltage core(vdd=0.8, high=0.7, low=0.1);
+module mobile_demo(input wire A, input wire B, output wire Y);
+  assign Y = ~(A & B);
+endmodule</textarea>
+<div class="actions"><button id="compile">開始編譯</button><button class="secondary" id="file">載入檔案</button></div>
+<input id="pick" type="file" accept=".v,.sv,.txt,text/plain" hidden>
+<div id="status" class="status">準備完成。大型 ALU 在手機頁面等待數分鐘是正常的。</div>
+</section>
+<section class="card results">
+<div class="tabs"><button class="active" data-tab="preview">版圖</button><button data-tab="drc">DRC</button><button data-tab="netlist">Netlist</button></div>
+<div id="preview" class="panel active"><div class="viewer"><iframe id="frame" title="Layout preview"></iframe></div></div>
+<div id="drc" class="panel"><pre id="report">尚未編譯</pre></div>
+<div id="netlist" class="panel"><pre id="json">尚未編譯</pre></div>
+<div class="downloads"><button id="svgDownload" disabled>下載 SVG</button><button id="reportDownload" disabled>下載 DRC</button></div>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id);let last={svg:"",report:""};
+function blobDownload(text,type,name){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===b.dataset.tab))});
+$("file").onclick=()=>$("pick").click();$("pick").onchange=async()=>{const f=$("pick").files[0];if(f)$("source").value=await f.text()};
+$("compile").onclick=async()=>{const btn=$("compile"),status=$("status");btn.disabled=true;btn.textContent="編譯中…";status.className="status";status.textContent="正在綜合、配置與繞線，請保持頁面開啟。";
+try{const r=await fetch("/api/compile",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:$("source").value,top:$("top").value})});const d=await r.json();if(d.error)throw new Error(d.error);
+last=d;$("report").textContent=d.report;$("json").textContent=JSON.stringify(d.netlist,null,2);$("frame").srcdoc=d.svg||"<h2 style='color:#b91c1c;font-family:sans-serif'>DRC 失敗，請查看報告</h2>";
+status.className="status "+(d.ok?"ok":"bad");status.textContent=d.ok?"編譯成功：0 DRC errors":"編譯完成，但 DRC 未通過；未輸出不可工作的版圖。";$("svgDownload").disabled=!d.svg;$("reportDownload").disabled=false;
+}catch(e){status.className="status bad";status.textContent="編譯失敗："+e.message}finally{btn.disabled=false;btn.textContent="開始編譯"}};
+$("svgDownload").onclick=()=>blobDownload(last.svg,"image/svg+xml","layout.svg");$("reportDownload").onclick=()=>blobDownload(last.report,"text/plain","drc_report.txt");
+</script>
+</body></html>
