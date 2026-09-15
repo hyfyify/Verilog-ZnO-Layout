@@ -360,7 +360,10 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         elif net == "$VDD":
             candidates = routing_layers
         elif net == "$GND":
-            candidates = tuple(reversed(routing_layers))
+            # Ground must obey the same low-to-high layer budget as every
+            # other net. The former reverse order forced even tiny designs
+            # directly onto metal24 and created a full wasteful via stack.
+            candidates = routing_layers
         else:
             candidates = routing_layers
         path = None
