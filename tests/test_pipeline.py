@@ -232,6 +232,15 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(shorts, [])
 
 
+
+    def test_mobile_web_ui_is_packaged_for_touch_compilation(self):
+        from zno_layout.web import WEB_ROOT
+        page = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn('name="viewport"', page)
+        self.assertIn('/api/compile', page)
+        self.assertIn('accept=".v,.sv,.txt,text/plain"', page)
+        self.assertIn('pinch-zoom', page)
+
     def test_unused_logic_is_absent_from_tft_layout(self):
         design = parse_assign_verilog(
             "module m(input wire a, input wire b, output wire y); "
