@@ -46,6 +46,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(pdk.rram_bits_per_zno, 1)
         self.assertGreater(pdk.layer_activation_penalty, pdk.via_penalty)
         self.assertEqual(pdk.interlayer_offset_p, 2)
+        self.assertGreaterEqual(pdk.external_pad_size_um, 100.0)
 
     def test_compile_creates_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -305,8 +306,14 @@ class PipelineTests(unittest.TestCase):
         pin0 = layout.pins["A0"]
         self.assertTrue(math.isclose(pin0[0], pdk.canvas_width_um / 2 + pdk.pixel_pitch_um / 2,
                                      abs_tol=pdk.pixel_pitch_um))
-        self.assertTrue(math.isclose(pin0[1], pdk.pixel_pitch_um / 2,
-                                     abs_tol=1e-6))
+        self.assertTrue(math.isclose(
+            pin0[1], math.ceil(pdk.external_pad_size_um / pdk.pixel_pitch_um)
+            * pdk.pixel_pitch_um / 2, abs_tol=1e-6,
+        ))
+        pin0_pad = next(shape for shape in layout.shapes if shape.label == "PIN0:A0")
+        self.assertEqual(pin0_pad.y1, 0)
+        self.assertGreaterEqual(pin0_pad.width, 100.0)
+        self.assertTrue(math.isclose(pin0_pad.width, pin0_pad.height, abs_tol=1e-6))
         self.assertEqual(run_drc(layout, pdk), [])
 
 
