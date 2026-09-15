@@ -20,6 +20,8 @@ class PhysicalMetrics:
     net_capacitance_ff: dict[str, float]
     bus_skew_p: dict[str, int]
     adjacent_layer_overlap_p: int
+    layer_utilization: dict[str, float]
+    routing_cost: float
 
 
 def _metal_level(layer: str) -> int:
@@ -89,15 +91,33 @@ def analyze_physical(layout: Layout, netlist: Netlist, pdk: PDK) -> PhysicalMetr
     else:
         core_area = 0.0
 
+    layer_wire: dict[str, int] = {}
+    for shape in routed:
+        layer_wire[shape.layer] = layer_wire.get(shape.layer, 0) + _wire_length_p(shape, pdk.pixel_pitch_um)
+    canvas_p = max(1, pdk.image_width_px * pdk.image_height_px)
+    layer_utilization = {
+        layer: min(1.0, length * (2 * round(pdk.min_spacing_um / pdk.pixel_pitch_um) + 1) / canvas_p)
+        for layer, length in layer_wire.items()
+    }
+    highest = max((_metal_level(s.layer) for s in metal), default=0)
+    routing_cost = (
+        sum(net_length.values())
+        + len(vias) * pdk.via_penalty
+        + max(0, highest - 2) * pdk.layer_activation_penalty
+        + adjacent_overlap * pdk.coupling_penalty
+    )
+
     return PhysicalMetrics(
         core_area_um2=core_area,
-        highest_metal=max((_metal_level(s.layer) for s in metal), default=0),
+        highest_metal=highest,
         via_count=len(vias),
         total_wire_length_p=sum(net_length.values()),
         net_length_p=net_length,
         net_capacitance_ff=capacitance,
         bus_skew_p=bus_skew,
         adjacent_layer_overlap_p=adjacent_overlap,
+        layer_utilization=layer_utilization,
+        routing_cost=routing_cost,
     )
 
 
@@ -112,4 +132,26 @@ def physical_drc(metrics: PhysicalMetrics, pdk: PDK) -> list[str]:
         for bus, skew in metrics.bus_skew_p.items()
         if skew > pdk.max_bus_skew_p
     )
+    return errors
+
+
+def scan_routing_layers(layout: Layout, pdk: PDK) -> list[str]:
+    """Post-plan self scan for duplicate vias and discontinuous used layers."""
+    errors: list[str] = []
+    seen: set[tuple[str, float, float, str]] = set()
+    for shape in layout.shapes:
+        if not shape.layer.startswith("via"):
+            continue
+        key = (shape.layer, shape.x1, shape.y1, shape.label)
+        if key in seen:
+            errors.append(
+                f"E_VIA_DUPLICATE {shape.layer} {shape.label} at ({shape.x1},{shape.y1})"
+            )
+        seen.add(key)
+    used = sorted({
+        _metal_level(shape.layer) for shape in layout.shapes
+        if shape.layer.startswith("metal") and _metal_level(shape.layer) >= 2
+    })
+    if used and used != list(range(2, max(used) + 1)):
+        errors.append(f"E_LAYER_GAP used routing levels are {used}")
     return errors
