@@ -487,12 +487,22 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
             else:
                 chosen_start = (start_grid[0], start_grid[1], 2)
                 chosen_source = source
+            route_distance = (
+                abs(chosen_start[0] - goal_grid[0])
+                + abs(chosen_start[1] - goal_grid[1])
+                + abs(chosen_start[2] - 2) * pdk.via_penalty
+            )
+            # A fixed search cap starved the first long VDD/GND trunk before
+            # a reusable power tree existed. Scale the cap with the unavoidable
+            # Manhattan distance, while keeping short local nets tightly bounded.
+            search_budget = max(3_000, 4 * route_distance + 1_000)
             path3d = _astar_multilayer(
                 chosen_start, (goal_grid[0], goal_grid[1], 2),
                 grid_width, grid_height, trial_highest,
                 occupied_by_level, net, clearance,
                 pdk.via_penalty, pdk.coupling_penalty,
                 pdk.interlayer_offset_p,
+                max_expansions=search_budget,
             )
             if path3d is not None:
                 active_highest = max(active_highest, trial_highest)
