@@ -217,12 +217,12 @@ def _astar_multilayer(
         return (abs(state[0] - goal[0]) + abs(state[1] - goal[1])
                 + abs(state[2] - goal[2]) * via_cost)
 
-    queue = [(heuristic(start), 0, start)]
+    queue = [(heuristic(start), heuristic(start), 0, start)]
     cost = {start: 0}
     parent: dict[tuple[int, int, int], tuple[int, int, int]] = {}
     expansions = 0
     while queue:
-        _, distance, state = heapq.heappop(queue)
+        _, _, distance, state = heapq.heappop(queue)
         if distance != cost.get(state):
             continue
         if state == goal:
@@ -270,7 +270,8 @@ def _astar_multilayer(
             if candidate_cost < cost.get(nxt, 1 << 60):
                 cost[nxt] = candidate_cost
                 parent[nxt] = state
-                heapq.heappush(queue, (candidate_cost + heuristic(nxt), candidate_cost, nxt))
+                estimate = heuristic(nxt)
+                heapq.heappush(queue, (candidate_cost + estimate, estimate, candidate_cost, nxt))
     return None
 
 def _path_rects(path: list[tuple[int, int]], pixel: float, net: str,
