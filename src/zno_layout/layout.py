@@ -127,6 +127,8 @@ def _astar_grid(
     start: tuple[int, int], goal: tuple[int, int], width: int, height: int,
     blocked: set[tuple[int, int]], occupied: dict[tuple[int, int], str], net: str,
     clearance: int = 1, max_expansions: int = 6_000,
+    soft_occupied: set[tuple[int, int]] | None = None,
+    soft_radius: int = 0, soft_penalty: int = 0,
 ) -> list[tuple[int, int]] | None:
     """Shortest four-neighbour route. Manhattan heuristic preserves optimality."""
     forbidden: set[tuple[int, int]] = set()
@@ -166,7 +168,22 @@ def _astar_grid(
                 # A one-pixel empty halo prevents edge/corner contact between different nets.
                 if nxt in forbidden:
                     continue
-            candidate = distance + 1
+            coupling_cost = 0
+            if soft_occupied and soft_penalty:
+                x2, y2 = nxt
+                # Penalise exact broadside overlap most strongly and nearby
+                # parallel adjacency less strongly. It remains a soft cost so
+                # routing cannot fail solely because ideal offset is impossible.
+                if nxt in soft_occupied:
+                    coupling_cost = soft_penalty * 2
+                else:
+                    for delta in range(1, soft_radius + 1):
+                        if ((x2 + delta, y2) in soft_occupied
+                                or (x2 - delta, y2) in soft_occupied
+                                or (x2, y2 + delta) in soft_occupied
+                                or (x2, y2 - delta) in soft_occupied):
+                            coupling_cost = max(coupling_cost, soft_penalty // delta)
+            candidate = distance + 1 + coupling_cost
             if candidate < cost.get(nxt, 1 << 60):
                 cost[nxt] = candidate
                 parent[nxt] = point
@@ -224,9 +241,16 @@ def _die_pin_point(number: int, count: int, pdk: PDK) -> tuple[float, float]:
 
 def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     pixel = pdk.pixel_pitch_um
-    margin = 2 * pixel
-    usable = pdk.canvas_width_um - 2 * margin
-    per_row = max(1, int(usable // (pdk.cell_width_um + pdk.row_spacing_um)))
+    clearance_um = max(pdk.min_spacing_um, pixel)
+    # The complete rectangle inside the perimeter contact-pad ring is legal
+    # placement/routing area. Sparse designs deliberately use that area to
+    # relieve local channel congestion before paying for another metal mask.
+    margin = math.ceil((pdk.external_pad_size_um + clearance_um) / pixel) * pixel
+    usable = max(pdk.cell_width_um, pdk.canvas_width_um - 2 * margin)
+    usable_height = max(pdk.cell_height_um, pdk.canvas_height_um - 2 * margin)
+    max_per_row = max(1, int(usable // (pdk.cell_width_um + pdk.min_spacing_um)))
+    aspect = usable / usable_height
+    per_row = max(1, min(max_per_row, math.ceil(math.sqrt(max(1, len(netlist.gates)) * aspect))))
     shapes, rram_boxes = _rram_shapes(netlist, pdk)
     net_sources: dict[str, tuple[int, int]] = {}
     pending: list[tuple[str, tuple[int, int]]] = []
@@ -234,18 +258,24 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     unrouted: list[str] = []
 
     row_count = max(1, math.ceil(len(netlist.gates) / per_row))
-    vertical_gap = max(pdk.row_spacing_um, math.floor(
-        (pdk.canvas_height_um - row_count * pdk.cell_height_um) / (row_count + 1) / pixel
-    ) * pixel)
+    pitch_y = (
+        0.0 if row_count <= 1 else
+        math.floor((usable_height - pdk.cell_height_um) / (row_count - 1) / pixel) * pixel
+    )
+    pitch_y = max(pdk.cell_height_um + pdk.min_spacing_um, pitch_y) if row_count > 1 else 0.0
+    core_origin_y = margin
     cell_boxes: list[tuple[float, float, float, float]] = list(rram_boxes)
     for index, gate in enumerate(netlist.gates):
         row, column = divmod(index, per_row)
         cells_this_row = min(per_row, len(netlist.gates) - row * per_row)
-        horizontal_gap = max(pdk.min_spacing_um, math.floor(
-            (pdk.canvas_width_um - cells_this_row * pdk.cell_width_um) / (cells_this_row + 1) / pixel
-        ) * pixel)
-        gate.x = horizontal_gap + column * (pdk.cell_width_um + horizontal_gap)
-        gate.y = vertical_gap + row * (pdk.cell_height_um + vertical_gap)
+        row_origin_x = margin
+        row_pitch_x = (
+            0.0 if cells_this_row <= 1 else
+            math.floor((usable - pdk.cell_width_um) / (cells_this_row - 1) / pixel) * pixel
+        )
+        row_pitch_x = max(pdk.cell_width_um + pdk.min_spacing_um, row_pitch_x) if cells_this_row > 1 else 0.0
+        gate.x = row_origin_x + column * row_pitch_x
+        gate.y = core_origin_y + row * pitch_y
         cell_boxes.append((gate.x, gate.y, gate.x + pdk.cell_width_um, gate.y + pdk.cell_height_um))
         cell, local_pins = _cell_shapes(gate, pdk)
         shapes.extend(cell)
@@ -257,13 +287,29 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
 
     package_points: dict[str, tuple[float, float]] = {}
     if netlist.package and netlist.package.name.startswith("DIE"):
+        pad_p = max(1, math.ceil(pdk.external_pad_size_um / pixel))
         for pin in netlist.pin_descriptors:
-            point = _die_pin_point(pin.number, netlist.package.pin_count, pdk)
-            package_points[pin.signal] = point
-            gx, gy = int(point[0] // pixel), int(point[1] // pixel)
-            shapes.append(Rect("metal1", gx * pixel, gy * pixel,
-                               (gx + 1) * pixel, (gy + 1) * pixel,
-                               f"PIN{pin.number}:{pin.signal}"))
+            edge_point = _die_pin_point(pin.number, netlist.package.pin_count, pdk)
+            gx, gy = int(edge_point[0] // pixel), int(edge_point[1] // pixel)
+            if gy == 0:  # top: PIN0 is centred here
+                x1p, y1p = max(0, min(pdk.image_width_px - pad_p, gx - pad_p // 2)), 0
+            elif gx == pdk.image_width_px - 1:  # right
+                x1p, y1p = pdk.image_width_px - pad_p, max(0, min(pdk.image_height_px - pad_p, gy - pad_p // 2))
+            elif gy == pdk.image_height_px - 1:  # bottom
+                x1p, y1p = max(0, min(pdk.image_width_px - pad_p, gx - pad_p // 2)), pdk.image_height_px - pad_p
+            else:  # left
+                x1p, y1p = 0, max(0, min(pdk.image_height_px - pad_p, gy - pad_p // 2))
+            # The global route lands inside the bond/probe pad, while the pad
+            # itself remains exactly flush with the die perimeter.
+            package_points[pin.signal] = (
+                (x1p + pad_p / 2) * pixel,
+                (y1p + pad_p / 2) * pixel,
+            )
+            shapes.append(Rect(
+                "metal1", x1p * pixel, y1p * pixel,
+                (x1p + pad_p) * pixel, (y1p + pad_p) * pixel,
+                f"PIN{pin.number}:{pin.signal}",
+            ))
 
     input_pitch = max(pdk.min_spacing_um + pdk.min_width_um, pdk.canvas_height_um // (len(netlist.inputs) + 1))
     for index, name in enumerate(netlist.inputs):
@@ -313,7 +359,7 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     # occupied when all lower legal planes fail, keeping ordinary designs
     # compressed to the smallest practical layer count.
     routing_layers = tuple(
-        f"metal{index}" for index in range(2, 25)
+        f"metal{index}" for index in range(2, pdk.max_routing_metal + 1)
         if f"metal{index}" in pdk.layers
     )
     occupied_by_layer: dict[str, dict[tuple[int, int], str]] = {
@@ -334,7 +380,10 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         elif net == "$VDD":
             candidates = routing_layers
         elif net == "$GND":
-            candidates = tuple(reversed(routing_layers))
+            # Ground must obey the same low-to-high layer budget as every
+            # other net. The former reverse order forced even tiny designs
+            # directly onto metal24 and created a full wasteful via stack.
+            candidates = routing_layers
         else:
             candidates = routing_layers
         path = None
@@ -349,8 +398,29 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
                     same_net_tree,
                     key=lambda point: abs(point[0] - goal_grid[0]) + abs(point[1] - goal_grid[1]),
                 )
-            trial = _astar_grid(trial_start, goal_grid, grid_width, grid_height,
-                                set(), occupied, net, clearance)
+            level = int(layer.removeprefix("metal"))
+            adjacent_occupied: set[tuple[int, int]] = set()
+            for other_layer, other_occupied in occupied_by_layer.items():
+                other_level = int(other_layer.removeprefix("metal"))
+                if abs(other_level - level) == 1:
+                    adjacent_occupied.update(
+                        point for point, owner in other_occupied.items() if owner != net
+                    )
+            trial = _astar_grid(
+                trial_start, goal_grid, grid_width, grid_height,
+                set(), occupied, net, clearance,
+                soft_occupied=adjacent_occupied,
+                soft_radius=pdk.interlayer_offset_p,
+                soft_penalty=pdk.coupling_penalty,
+            )
+            # Do not open a higher plane merely because the preferred
+            # inter-layer offset made this plane expensive. Prove the same
+            # layer cannot meet hard DRC before paying the new-layer cost.
+            if trial is None and adjacent_occupied:
+                trial = _astar_grid(
+                    trial_start, goal_grid, grid_width, grid_height,
+                    set(), occupied, net, clearance,
+                )
             if trial is not None:
                 path, chosen_layer = trial, layer
                 chosen_source = ((trial_start[0] + 0.5) * pixel,
@@ -373,6 +443,20 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         for point in path:
             occupied_by_layer[chosen_layer][point] = net
         routes.append((net, chosen_source, destination))
+
+    # The greedy tree router may revisit a branch endpoint. One physical via
+    # at one coordinate is sufficient for a net, so remove exact duplicates
+    # before DRC, mask export and parasitic extraction.
+    unique_shapes: list[Rect] = []
+    seen_vias: set[tuple[str, float, float, float, float, str]] = set()
+    for shape in shapes:
+        if shape.layer.startswith("via"):
+            key = (shape.layer, shape.x1, shape.y1, shape.x2, shape.y2, shape.label)
+            if key in seen_vias:
+                continue
+            seen_vias.add(key)
+        unique_shapes.append(shape)
+    shapes = unique_shapes
 
     rows = math.ceil(max(1, len(netlist.gates)) / per_row)
     used_height = margin + rows * (pdk.cell_height_um + pdk.row_spacing_um)
@@ -427,6 +511,14 @@ def run_drc(layout: Layout, pdk: PDK) -> list[str]:
             if abs(units - round(units)) > epsilon:
                 errors.append(f"E_OFFGRID shape {index} ({shape.layer}): {coordinate} um")
                 break
+    pads = [shape for shape in layout.shapes
+            if shape.layer == "metal1" and shape.label.startswith("PIN")]
+    for index, first in enumerate(pads):
+        for second in pads[index + 1:]:
+            overlap_x = min(first.x2, second.x2) - max(first.x1, second.x1)
+            overlap_y = min(first.y2, second.y2) - max(first.y1, second.y1)
+            if overlap_x > epsilon and overlap_y > epsilon:
+                errors.append(f"E_PAD_OVERLAP {first.label} overlaps {second.label}")
     for net, source, sink in layout.routes:
         if not _route_is_connected(layout, net, source, sink):
             errors.append(f"E_CONNECT {net}: {source} does not reach {sink}")
