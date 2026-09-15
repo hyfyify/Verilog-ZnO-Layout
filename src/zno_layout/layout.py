@@ -241,13 +241,15 @@ def _die_pin_point(number: int, count: int, pdk: PDK) -> tuple[float, float]:
 
 def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     pixel = pdk.pixel_pitch_um
-    margin = 2 * pixel
-    usable = pdk.canvas_width_um - 2 * margin
+    clearance_um = max(pdk.min_spacing_um, pixel)
+    # The complete rectangle inside the perimeter contact-pad ring is legal
+    # placement/routing area. Sparse designs deliberately use that area to
+    # relieve local channel congestion before paying for another metal mask.
+    margin = math.ceil((pdk.external_pad_size_um + clearance_um) / pixel) * pixel
+    usable = max(pdk.cell_width_um, pdk.canvas_width_um - 2 * margin)
+    usable_height = max(pdk.cell_height_um, pdk.canvas_height_um - 2 * margin)
     max_per_row = max(1, int(usable // (pdk.cell_width_um + pdk.min_spacing_um)))
-    # Compact connected logic into a centred core instead of spreading every
-    # row across the complete die. This shortens the dominant internal nets;
-    # package I/O alone travels to the perimeter.
-    aspect = pdk.canvas_width_um / pdk.canvas_height_um
+    aspect = usable / usable_height
     per_row = max(1, min(max_per_row, math.ceil(math.sqrt(max(1, len(netlist.gates)) * aspect))))
     shapes, rram_boxes = _rram_shapes(netlist, pdk)
     net_sources: dict[str, tuple[int, int]] = {}
@@ -256,21 +258,23 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     unrouted: list[str] = []
 
     row_count = max(1, math.ceil(len(netlist.gates) / per_row))
-    pitch_x = pdk.cell_width_um + pdk.min_spacing_um
-    pitch_y = pdk.cell_height_um + max(pdk.row_spacing_um, pdk.min_spacing_um)
-    core_height = row_count * pdk.cell_height_um + (row_count - 1) * (pitch_y - pdk.cell_height_um)
-    core_origin_y = max(margin, math.floor(
-        (pdk.canvas_height_um - core_height) / 2 / pixel
-    ) * pixel)
+    pitch_y = (
+        0.0 if row_count <= 1 else
+        math.floor((usable_height - pdk.cell_height_um) / (row_count - 1) / pixel) * pixel
+    )
+    pitch_y = max(pdk.cell_height_um + pdk.min_spacing_um, pitch_y) if row_count > 1 else 0.0
+    core_origin_y = margin
     cell_boxes: list[tuple[float, float, float, float]] = list(rram_boxes)
     for index, gate in enumerate(netlist.gates):
         row, column = divmod(index, per_row)
         cells_this_row = min(per_row, len(netlist.gates) - row * per_row)
-        row_width = cells_this_row * pdk.cell_width_um + (cells_this_row - 1) * pdk.min_spacing_um
-        row_origin_x = max(margin, math.floor(
-            (pdk.canvas_width_um - row_width) / 2 / pixel
-        ) * pixel)
-        gate.x = row_origin_x + column * pitch_x
+        row_origin_x = margin
+        row_pitch_x = (
+            0.0 if cells_this_row <= 1 else
+            math.floor((usable - pdk.cell_width_um) / (cells_this_row - 1) / pixel) * pixel
+        )
+        row_pitch_x = max(pdk.cell_width_um + pdk.min_spacing_um, row_pitch_x) if cells_this_row > 1 else 0.0
+        gate.x = row_origin_x + column * row_pitch_x
         gate.y = core_origin_y + row * pitch_y
         cell_boxes.append((gate.x, gate.y, gate.x + pdk.cell_width_um, gate.y + pdk.cell_height_um))
         cell, local_pins = _cell_shapes(gate, pdk)
@@ -355,7 +359,7 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     # occupied when all lower legal planes fail, keeping ordinary designs
     # compressed to the smallest practical layer count.
     routing_layers = tuple(
-        f"metal{index}" for index in range(2, 25)
+        f"metal{index}" for index in range(2, pdk.max_routing_metal + 1)
         if f"metal{index}" in pdk.layers
     )
     occupied_by_layer: dict[str, dict[tuple[int, int], str]] = {
