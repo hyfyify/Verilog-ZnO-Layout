@@ -442,7 +442,11 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     occupied_by_layer: dict[str, dict[tuple[int, int], str]] = {
         layer: {} for layer in routing_layers
     }
-    net_layer: dict[str, str] = {}
+    occupied_by_level: dict[int, dict[tuple[int, int], str]] = {
+        int(layer.removeprefix("metal")): occupied
+        for layer, occupied in occupied_by_layer.items()
+    }
+    active_highest = min(3, max(occupied_by_level))
     for route_index, (net, destination) in enumerate(pending):
         source = net_sources.get(net)
         if not source:
@@ -451,74 +455,79 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         start_grid = (int(source[0] // pixel), int(source[1] // pixel))
         goal_grid = (int(destination[0] // pixel), int(destination[1] // pixel))
         clearance = max(1, math.ceil(pdk.min_spacing_um / pixel))
-        preferred = net_layer.get(net)
-        if preferred:
-            candidates = (preferred,) + tuple(layer for layer in routing_layers if layer != preferred)
-        elif net == "$VDD":
-            candidates = routing_layers
-        elif net == "$GND":
-            # Ground must obey the same low-to-high layer budget as every
-            # other net. The former reverse order forced even tiny designs
-            # directly onto metal24 and created a full wasteful via stack.
-            candidates = routing_layers
-        else:
-            candidates = routing_layers
-        path = None
-        chosen_layer = ""
+
+        path3d = None
+        chosen_start = (start_grid[0], start_grid[1], 2)
         chosen_source = source
-        for layer in candidates:
-            occupied = occupied_by_layer[layer]
-            trial_start = start_grid
-            same_net_tree = [point for point, owner in occupied.items() if owner == net]
-            if same_net_tree:
-                trial_start = min(
-                    same_net_tree,
-                    key=lambda point: abs(point[0] - goal_grid[0]) + abs(point[1] - goal_grid[1]),
+        # Activate exactly one additional layer only after all paths through
+        # the currently planned stack have failed the exhaustive 3-D search.
+        for trial_highest in range(active_highest, max(occupied_by_level) + 1):
+            same_net_states = [
+                (point[0], point[1], level)
+                for level in range(2, trial_highest + 1)
+                for point, owner in occupied_by_level[level].items()
+                if owner == net
+            ]
+            if same_net_states:
+                chosen_start = min(
+                    same_net_states,
+                    key=lambda state: (
+                        abs(state[0] - goal_grid[0])
+                        + abs(state[1] - goal_grid[1])
+                        + abs(state[2] - 2) * pdk.via_penalty
+                    ),
                 )
-            level = int(layer.removeprefix("metal"))
-            adjacent_occupied: set[tuple[int, int]] = set()
-            for other_layer, other_occupied in occupied_by_layer.items():
-                other_level = int(other_layer.removeprefix("metal"))
-                if abs(other_level - level) == 1:
-                    adjacent_occupied.update(
-                        point for point, owner in other_occupied.items() if owner != net
-                    )
-            trial = _astar_grid(
-                trial_start, goal_grid, grid_width, grid_height,
-                set(), occupied, net, clearance,
-                soft_occupied=adjacent_occupied,
-                soft_radius=pdk.interlayer_offset_p,
-                soft_penalty=pdk.coupling_penalty,
+                chosen_source = (
+                    (chosen_start[0] + 0.5) * pixel,
+                    (chosen_start[1] + 0.5) * pixel,
+                )
+            else:
+                chosen_start = (start_grid[0], start_grid[1], 2)
+                chosen_source = source
+            path3d = _astar_multilayer(
+                chosen_start, (goal_grid[0], goal_grid[1], 2),
+                grid_width, grid_height, trial_highest,
+                occupied_by_level, net, clearance,
+                pdk.via_penalty, pdk.coupling_penalty,
+                pdk.interlayer_offset_p,
             )
-            # Do not open a higher plane merely because the preferred
-            # inter-layer offset made this plane expensive. Prove the same
-            # layer cannot meet hard DRC before paying the new-layer cost.
-            if trial is None and adjacent_occupied:
-                trial = _astar_grid(
-                    trial_start, goal_grid, grid_width, grid_height,
-                    set(), occupied, net, clearance,
-                )
-            if trial is not None:
-                path, chosen_layer = trial, layer
-                chosen_source = ((trial_start[0] + 0.5) * pixel,
-                                 (trial_start[1] + 0.5) * pixel)
+            if path3d is not None:
+                active_highest = max(active_highest, trial_highest)
                 break
-        if path is None:
-            unrouted.append(f"{net}: no p-grid path from {source} to {destination}")
+        if path3d is None:
+            unrouted.append(f"{net}: no p-grid multilayer path from {source} to {destination}")
             continue
-        net_layer[net] = chosen_layer
-        shapes.extend(_path_rects(path, pixel, net, chosen_layer))
-        # Vias are emitted at real cell/pad endpoints. Branches that begin on an
-        # existing same-net tree need only the destination via.
-        via_points = [goal_grid] if chosen_source != source else [start_grid, goal_grid]
-        for vx, vy in via_points:
-            target_level = int(chosen_layer.removeprefix("metal"))
-            via_layers = tuple(f"via{level}{level + 1}" for level in range(1, target_level))
-            for via_layer in via_layers:
-                shapes.append(Rect(via_layer, vx * pixel, vy * pixel,
-                                   (vx + 1) * pixel, (vy + 1) * pixel, net))
-        for point in path:
-            occupied_by_layer[chosen_layer][point] = net
+
+        current_level = path3d[0][2]
+        segment = [(path3d[0][0], path3d[0][1])]
+        for previous, state in zip(path3d, path3d[1:]):
+            x, y, level = state
+            if level == current_level:
+                segment.append((x, y))
+                continue
+            shapes.extend(_path_rects(segment, pixel, net, f"metal{current_level}"))
+            via_level = min(current_level, level)
+            shapes.append(Rect(
+                f"via{via_level}{via_level + 1}",
+                x * pixel, y * pixel, (x + 1) * pixel, (y + 1) * pixel, net,
+            ))
+            occupied_by_level[current_level][(x, y)] = net
+            occupied_by_level[level][(x, y)] = net
+            current_level = level
+            segment = [(x, y)]
+        shapes.extend(_path_rects(segment, pixel, net, f"metal{current_level}"))
+
+        # Both external endpoints are metal1 landings. A branch beginning on
+        # an existing same-net tree already owns its connection.
+        if chosen_source == source:
+            sx, sy = start_grid
+            shapes.append(Rect("via12", sx * pixel, sy * pixel,
+                               (sx + 1) * pixel, (sy + 1) * pixel, net))
+        gx, gy = goal_grid
+        shapes.append(Rect("via12", gx * pixel, gy * pixel,
+                           (gx + 1) * pixel, (gy + 1) * pixel, net))
+        for x, y, level in path3d:
+            occupied_by_level[level][(x, y)] = net
         routes.append((net, chosen_source, destination))
 
     # The greedy tree router may revisit a branch endpoint. One physical via
