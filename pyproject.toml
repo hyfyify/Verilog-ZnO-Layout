@@ -12,7 +12,11 @@ authors = [{name = "hyfyify"}]
 
 [project.scripts]
 zno-layout = "zno_layout.cli:main"
+zno-layout-web = "zno_layout.web:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+
+[tool.setuptools.package-data]
+zno_layout = ["web/*.html"]
