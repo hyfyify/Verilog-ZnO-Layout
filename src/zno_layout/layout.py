@@ -409,33 +409,19 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
                 soft_radius=pdk.interlayer_offset_p,
                 soft_penalty=pdk.coupling_penalty,
             )
+            # Do not open a higher plane merely because the preferred
+            # inter-layer offset made this plane expensive. Prove the same
+            # layer cannot meet hard DRC before paying the new-layer cost.
+            if trial is None and adjacent_occupied:
+                trial = _astar_grid(
+                    trial_start, goal_grid, grid_width, grid_height,
+                    set(), occupied, net, clearance,
+                )
             if trial is not None:
                 path, chosen_layer = trial, layer
                 chosen_source = ((trial_start[0] + 0.5) * pixel,
                                  (trial_start[1] + 0.5) * pixel)
                 break
-        # Coupling avoidance is an optimisation, never a reason to leave a
-        # legal net open. If every offset-aware trial exhausts its budget,
-        # retry low-to-high without the soft field before declaring failure.
-        if path is None:
-            for layer in candidates:
-                occupied = occupied_by_layer[layer]
-                trial_start = start_grid
-                same_net_tree = [point for point, owner in occupied.items() if owner == net]
-                if same_net_tree:
-                    trial_start = min(
-                        same_net_tree,
-                        key=lambda point: abs(point[0] - goal_grid[0]) + abs(point[1] - goal_grid[1]),
-                    )
-                trial = _astar_grid(
-                    trial_start, goal_grid, grid_width, grid_height,
-                    set(), occupied, net, clearance,
-                )
-                if trial is not None:
-                    path, chosen_layer = trial, layer
-                    chosen_source = ((trial_start[0] + 0.5) * pixel,
-                                     (trial_start[1] + 0.5) * pixel)
-                    break
         if path is None:
             unrouted.append(f"{net}: no p-grid path from {source} to {destination}")
             continue
