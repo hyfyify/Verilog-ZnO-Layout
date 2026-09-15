@@ -192,6 +192,87 @@ def _astar_grid(
     return None
 
 
+
+def _astar_multilayer(
+    start: tuple[int, int, int], goal: tuple[int, int, int],
+    width: int, height: int, max_level: int,
+    occupied_by_level: dict[int, dict[tuple[int, int], str]],
+    net: str, clearance: int, via_cost: int,
+    coupling_penalty: int, offset_p: int,
+    max_expansions: int = 120_000,
+) -> list[tuple[int, int, int]] | None:
+    """3-D Manhattan router; vertical moves are adjacent-layer vias."""
+    forbidden: dict[int, set[tuple[int, int]]] = {}
+    for level in range(2, max_level + 1):
+        blocked: set[tuple[int, int]] = set()
+        for (px, py), owner in occupied_by_level[level].items():
+            if owner == net:
+                continue
+            for ox in range(-clearance, clearance + 1):
+                for oy in range(-clearance, clearance + 1):
+                    blocked.add((px + ox, py + oy))
+        forbidden[level] = blocked
+
+    def heuristic(state: tuple[int, int, int]) -> int:
+        return (abs(state[0] - goal[0]) + abs(state[1] - goal[1])
+                + abs(state[2] - goal[2]) * via_cost)
+
+    queue = [(heuristic(start), 0, start)]
+    cost = {start: 0}
+    parent: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+    expansions = 0
+    while queue:
+        _, distance, state = heapq.heappop(queue)
+        if distance != cost.get(state):
+            continue
+        if state == goal:
+            path = [state]
+            while state != start:
+                state = parent[state]
+                path.append(state)
+            return list(reversed(path))
+        expansions += 1
+        if expansions > max_expansions:
+            return None
+        x, y, level = state
+        neighbours = [
+            (x + 1, y, level, 1), (x - 1, y, level, 1),
+            (x, y + 1, level, 1), (x, y - 1, level, 1),
+        ]
+        if level > 2:
+            neighbours.append((x, y, level - 1, via_cost))
+        if level < max_level:
+            neighbours.append((x, y, level + 1, via_cost))
+        for nx, ny, nl, step in neighbours:
+            if not (0 <= nx < width and 0 <= ny < height):
+                continue
+            point = (nx, ny)
+            if (nx, ny, nl) not in {start, goal} and point in forbidden[nl]:
+                continue
+            extra = 0
+            # Broadside and close parallel conductors on adjacent planes are
+            # legal only as a last resort, so price them without forbidding.
+            for adjacent in (nl - 1, nl + 1):
+                if adjacent < 2 or adjacent > max_level:
+                    continue
+                other = occupied_by_level[adjacent]
+                if other.get(point) not in {None, net}:
+                    extra += coupling_penalty * 2
+                for delta in range(1, offset_p + 1):
+                    if any(other.get(candidate) not in {None, net} for candidate in (
+                        (nx + delta, ny), (nx - delta, ny),
+                        (nx, ny + delta), (nx, ny - delta),
+                    )):
+                        extra += max(1, coupling_penalty // delta)
+                        break
+            candidate_cost = distance + step + extra
+            nxt = (nx, ny, nl)
+            if candidate_cost < cost.get(nxt, 1 << 60):
+                cost[nxt] = candidate_cost
+                parent[nxt] = state
+                heapq.heappush(queue, (candidate_cost + heuristic(nxt), candidate_cost, nxt))
+    return None
+
 def _path_rects(path: list[tuple[int, int]], pixel: float, net: str,
                 layer: str = "metal1") -> list[Rect]:
     if not path:
