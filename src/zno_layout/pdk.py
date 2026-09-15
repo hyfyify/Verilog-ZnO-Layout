@@ -34,6 +34,8 @@ class PDK:
     interlayer_offset_p: int
     max_net_capacitance_ff: float
     max_bus_skew_p: int
+    layer_activation_penalty: int
+    via_penalty: int
 
     @classmethod
     def load(cls, path: str | Path) -> "PDK":
@@ -71,4 +73,6 @@ class PDK:
             interlayer_offset_p=int(data.get("interlayer_offset_p", 2)),
             max_net_capacitance_ff=float(data.get("max_net_capacitance_ff", 500.0)),
             max_bus_skew_p=int(data.get("max_bus_skew_p", 5000)),
+            layer_activation_penalty=int(data.get("layer_activation_penalty", 25000)),
+            via_penalty=int(data.get("via_penalty", 40)),
         )
