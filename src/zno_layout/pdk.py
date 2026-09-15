@@ -37,6 +37,9 @@ class PDK:
     layer_activation_penalty: int
     via_penalty: int
     external_pad_size_um: float
+    max_routing_metal: int
+    target_channel_utilization: float
+    min_channel_utilization_before_layer: float
 
     @classmethod
     def load(cls, path: str | Path) -> "PDK":
@@ -77,4 +80,7 @@ class PDK:
             layer_activation_penalty=int(data.get("layer_activation_penalty", 25000)),
             via_penalty=int(data.get("via_penalty", 40)),
             external_pad_size_um=float(data.get("external_pad_size_um", 101.6)),
+            max_routing_metal=int(data.get("max_routing_metal", 10)),
+            target_channel_utilization=float(data.get("target_channel_utilization", 0.80)),
+            min_channel_utilization_before_layer=float(data.get("min_channel_utilization_before_layer", 0.60)),
         )
