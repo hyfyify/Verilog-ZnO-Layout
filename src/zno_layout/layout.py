@@ -199,7 +199,7 @@ def _astar_multilayer(
     occupied_by_level: dict[int, dict[tuple[int, int], str]],
     net: str, clearance: int, via_cost: int,
     coupling_penalty: int, offset_p: int,
-    max_expansions: int = 30_000,
+    max_expansions: int = 12_000,
 ) -> list[tuple[int, int, int]] | None:
     """3-D Manhattan router; vertical moves are adjacent-layer vias."""
     forbidden: dict[int, set[tuple[int, int]]] = {}
@@ -461,7 +461,10 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         chosen_source = source
         # Activate exactly one additional layer only after all paths through
         # the currently planned stack have failed the exhaustive 3-D search.
-        for trial_highest in range(active_highest, max(occupied_by_level) + 1):
+        for trial_highest in range(
+            active_highest,
+            min(active_highest + 1, max(occupied_by_level)) + 1,
+        ):
             same_net_states = [
                 (point[0], point[1], level)
                 for level in range(2, trial_highest + 1)
