@@ -6,7 +6,7 @@ from pathlib import Path
 from .export import write_masks, write_netlist, write_svg
 from .layout import place_and_route, run_drc
 from .pdk import PDK
-from .physical import analyze_physical, physical_drc
+from .physical import analyze_physical, physical_drc, scan_routing_layers
 from .techmap import expand_to_nmos_primitives, prune_unused_logic
 from .verilog import run_yosys
 from .electrical import SynthesisError, validate_and_adapt
@@ -22,6 +22,7 @@ def compile_design(source: Path, output: Path, pdk_path: Path, top: str | None =
     errors = run_drc(layout, pdk)
     metrics = analyze_physical(layout, netlist, pdk)
     errors.extend(physical_drc(metrics, pdk))
+    errors.extend(scan_routing_layers(layout, pdk))
     output.mkdir(parents=True, exist_ok=True)
     # Never leave a stale successful layout behind after a failed rebuild.
     for stale in [output / "layout.svg", *output.glob("mask_*.png")]:
@@ -41,6 +42,14 @@ def compile_design(source: Path, output: Path, pdk_path: Path, top: str | None =
         f"Total wire length: {metrics.total_wire_length_p}p",
         f"Via count: {metrics.via_count}",
         f"Adjacent-layer overlap: {metrics.adjacent_layer_overlap_p}p",
+        f"Weighted routing cost: {metrics.routing_cost:.0f}",
+        "Layer self-scan utilization: " + (", ".join(
+            f"{layer}={value * 100:.2f}%"
+            for layer, value in sorted(
+                metrics.layer_utilization.items(),
+                key=lambda item: int(item[0].removeprefix("metal")),
+            )
+        ) or "none"),
         "Bus skew: " + (", ".join(
             f"{bus}={skew}p" for bus, skew in sorted(metrics.bus_skew_p.items())
         ) or "none"),
