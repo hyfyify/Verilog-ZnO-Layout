@@ -507,6 +507,14 @@ def run_drc(layout: Layout, pdk: PDK) -> list[str]:
             if abs(units - round(units)) > epsilon:
                 errors.append(f"E_OFFGRID shape {index} ({shape.layer}): {coordinate} um")
                 break
+    pads = [shape for shape in layout.shapes
+            if shape.layer == "metal1" and shape.label.startswith("PIN")]
+    for index, first in enumerate(pads):
+        for second in pads[index + 1:]:
+            overlap_x = min(first.x2, second.x2) - max(first.x1, second.x1)
+            overlap_y = min(first.y2, second.y2) - max(first.y1, second.y1)
+            if overlap_x > epsilon and overlap_y > epsilon:
+                errors.append(f"E_PAD_OVERLAP {first.label} overlaps {second.label}")
     for net, source, sink in layout.routes:
         if not _route_is_connected(layout, net, source, sink):
             errors.append(f"E_CONNECT {net}: {source} does not reach {sink}")
