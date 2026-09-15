@@ -145,5 +145,7 @@
   "coupling_penalty": 6,
   "interlayer_offset_p": 2,
   "max_net_capacitance_ff": 500,
-  "max_bus_skew_p": 5000
+  "max_bus_skew_p": 5000,
+  "layer_activation_penalty": 25000,
+  "via_penalty": 40
 }
