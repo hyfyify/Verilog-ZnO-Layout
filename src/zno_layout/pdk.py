@@ -36,6 +36,7 @@ class PDK:
     max_bus_skew_p: int
     layer_activation_penalty: int
     via_penalty: int
+    external_pad_size_um: float
 
     @classmethod
     def load(cls, path: str | Path) -> "PDK":
@@ -75,4 +76,5 @@ class PDK:
             max_bus_skew_p=int(data.get("max_bus_skew_p", 5000)),
             layer_activation_penalty=int(data.get("layer_activation_penalty", 25000)),
             via_penalty=int(data.get("via_penalty", 40)),
+            external_pad_size_um=float(data.get("external_pad_size_um", 101.6)),
         )
