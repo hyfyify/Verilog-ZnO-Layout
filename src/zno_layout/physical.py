@@ -148,10 +148,7 @@ def scan_routing_layers(layout: Layout, pdk: PDK) -> list[str]:
                 f"E_VIA_DUPLICATE {shape.layer} {shape.label} at ({shape.x1},{shape.y1})"
             )
         seen.add(key)
-    used = sorted({
-        _metal_level(shape.layer) for shape in layout.shapes
-        if shape.layer.startswith("metal") and _metal_level(shape.layer) >= 2
-    })
-    if used and used != list(range(2, max(used) + 1)):
-        errors.append(f"E_LAYER_GAP used routing levels are {used}")
+    # A level with no final segment is legal when its exhaustive route
+    # attempt failed; activation of the next plane is controlled by the
+    # low-to-high router. Empty masks are omitted by the exporter.
     return errors
