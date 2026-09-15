@@ -71,6 +71,38 @@ Run the tests:
 python -m unittest discover -s tests -v
 ```
 
+
+## Mobile web compiler
+
+The touch-first web interface can load a `.v`, `.sv` or `.txt` file, compile it,
+show the interactive SVG, DRC report and placed netlist, and download the SVG/report.
+
+On a Windows PC, expose it to a phone on the same Wi-Fi:
+
+```powershell
+zno-layout-web --host 0.0.0.0 --port 8000
+ipconfig
+```
+
+Open `http://<PC IPv4 address>:8000` on the phone. Keep the terminal open and
+allow Python through Windows Firewall on a private network. Compilation runs on
+the PC while the complete UI is controlled by the phone.
+
+Android can also compile locally in Termux (fallback Verilog parser; Yosys is
+optional and normally unavailable):
+
+```bash
+pkg update
+pkg install python git
+git clone https://github.com/hyfyify/Verilog-ZnO-Layout.git
+cd Verilog-ZnO-Layout
+python -m pip install -e .
+zno-layout-web --host 127.0.0.1 --port 8000
+```
+
+Then open `http://127.0.0.1:8000` in the same phone. Large ALU routing may take
+several minutes, so keep Termux and the browser alive.
+
 ## PDK
 
 All dimensions in `pdk/default.json` are micrometres. The default canvas is 8128×6096 µm and maps to 1280×960 pixels (6.35 µm/pixel), matching the current 0.4-inch LCoS target.
