@@ -283,13 +283,29 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
 
     package_points: dict[str, tuple[float, float]] = {}
     if netlist.package and netlist.package.name.startswith("DIE"):
+        pad_p = max(1, math.ceil(pdk.external_pad_size_um / pixel))
         for pin in netlist.pin_descriptors:
-            point = _die_pin_point(pin.number, netlist.package.pin_count, pdk)
-            package_points[pin.signal] = point
-            gx, gy = int(point[0] // pixel), int(point[1] // pixel)
-            shapes.append(Rect("metal1", gx * pixel, gy * pixel,
-                               (gx + 1) * pixel, (gy + 1) * pixel,
-                               f"PIN{pin.number}:{pin.signal}"))
+            edge_point = _die_pin_point(pin.number, netlist.package.pin_count, pdk)
+            gx, gy = int(edge_point[0] // pixel), int(edge_point[1] // pixel)
+            if gy == 0:  # top: PIN0 is centred here
+                x1p, y1p = max(0, min(pdk.image_width_px - pad_p, gx - pad_p // 2)), 0
+            elif gx == pdk.image_width_px - 1:  # right
+                x1p, y1p = pdk.image_width_px - pad_p, max(0, min(pdk.image_height_px - pad_p, gy - pad_p // 2))
+            elif gy == pdk.image_height_px - 1:  # bottom
+                x1p, y1p = max(0, min(pdk.image_width_px - pad_p, gx - pad_p // 2)), pdk.image_height_px - pad_p
+            else:  # left
+                x1p, y1p = 0, max(0, min(pdk.image_height_px - pad_p, gy - pad_p // 2))
+            # The global route lands inside the bond/probe pad, while the pad
+            # itself remains exactly flush with the die perimeter.
+            package_points[pin.signal] = (
+                (x1p + pad_p / 2) * pixel,
+                (y1p + pad_p / 2) * pixel,
+            )
+            shapes.append(Rect(
+                "metal1", x1p * pixel, y1p * pixel,
+                (x1p + pad_p) * pixel, (y1p + pad_p) * pixel,
+                f"PIN{pin.number}:{pin.signal}",
+            ))
 
     input_pitch = max(pdk.min_spacing_um + pdk.min_width_um, pdk.canvas_height_um // (len(netlist.inputs) + 1))
     for index, name in enumerate(netlist.inputs):
