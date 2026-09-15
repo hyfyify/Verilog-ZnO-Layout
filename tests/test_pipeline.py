@@ -315,6 +315,22 @@ class PipelineTests(unittest.TestCase):
         self.assertGreaterEqual(pin0_pad.width, 100.0)
         self.assertTrue(math.isclose(pin0_pad.width, pin0_pad.height, abs_tol=1e-6))
         self.assertEqual(run_drc(layout, pdk), [])
+        self.assertEqual(scan_routing_layers(layout, pdk), [])
+        via_keys = [
+            (shape.layer, shape.x1, shape.y1, shape.label)
+            for shape in layout.shapes if shape.layer.startswith("via")
+        ]
+        self.assertEqual(len(via_keys), len(set(via_keys)))
+        metrics = analyze_physical(layout, mapped, pdk)
+        print(
+            "ALU_PHYSICAL "
+            f"core_um2={metrics.core_area_um2:.2f} "
+            f"highest_metal={metrics.highest_metal} "
+            f"vias={metrics.via_count} "
+            f"wire_p={metrics.total_wire_length_p} "
+            f"overlap_p={metrics.adjacent_layer_overlap_p} "
+            f"bus_skew={metrics.bus_skew_p}"
+        )
 
 
 if __name__ == "__main__":
