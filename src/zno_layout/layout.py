@@ -199,7 +199,7 @@ def _astar_multilayer(
     occupied_by_level: dict[int, dict[tuple[int, int], str]],
     net: str, clearance: int, via_cost: int,
     coupling_penalty: int, offset_p: int,
-    max_expansions: int = 120_000,
+    max_expansions: int = 30_000,
 ) -> list[tuple[int, int, int]] | None:
     """3-D Manhattan router; vertical moves are adjacent-layer vias."""
     forbidden: dict[int, set[tuple[int, int]]] = {}
