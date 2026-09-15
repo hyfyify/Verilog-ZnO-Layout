@@ -11,7 +11,7 @@ from zno_layout.layout import _astar_grid, _cell_shapes, _touches, place_and_rou
 from zno_layout.layout import _rram_shapes
 from zno_layout.model import Gate
 from zno_layout.pdk import PDK
-from zno_layout.physical import analyze_physical, physical_drc
+from zno_layout.physical import analyze_physical, physical_drc, scan_routing_layers
 from zno_layout.techmap import expand_to_nmos_primitives, prune_unused_logic
 from zno_layout.verilog import parse_assign_verilog, run_yosys
 
@@ -44,6 +44,8 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(pdk.tft_width_p, 2)
         self.assertEqual(pdk.cells["NAND"]["tft_count"], 3)
         self.assertEqual(pdk.rram_bits_per_zno, 1)
+        self.assertGreater(pdk.layer_activation_penalty, pdk.via_penalty)
+        self.assertEqual(pdk.interlayer_offset_p, 2)
 
     def test_compile_creates_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -52,6 +54,7 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertTrue((output / "layout.svg").exists())
             self.assertTrue((output / "mask_zno.png").exists())
+            self.assertFalse((output / "mask_metal24.png").exists())
             parsed = json.loads((output / "netlist.json").read_text())
             self.assertEqual(len(parsed["gates"]), 3)
 
@@ -195,7 +198,10 @@ class PipelineTests(unittest.TestCase):
         self.assertGreater(metrics.total_wire_length_p, 0)
         self.assertIn("Y", metrics.bus_skew_p)
         self.assertTrue(metrics.net_capacitance_ff)
+        self.assertGreater(metrics.routing_cost, metrics.total_wire_length_p)
+        self.assertTrue(metrics.layer_utilization)
         self.assertEqual(physical_drc(metrics, pdk), [])
+        self.assertEqual(scan_routing_layers(layout, pdk), [])
 
     def test_all_metal_edges_are_on_pixel_grid(self):
         pdk = PDK.load(ROOT / "pdk/default.json")
