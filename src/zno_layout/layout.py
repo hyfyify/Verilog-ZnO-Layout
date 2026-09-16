@@ -274,7 +274,11 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
             math.floor((usable - pdk.cell_width_um) / (cells_this_row - 1) / pixel) * pixel
         )
         row_pitch_x = max(pdk.cell_width_um + pdk.min_spacing_um, row_pitch_x) if cells_this_row > 1 else 0.0
-        gate.x = row_origin_x + column * row_pitch_x
+        # Serpentine rows keep consecutive technology-mapped cells close:
+        # the end of one row sits beside the beginning of the next instead of
+        # creating a full-die flyback wire.
+        physical_column = column if row % 2 == 0 else cells_this_row - 1 - column
+        gate.x = row_origin_x + physical_column * row_pitch_x
         gate.y = core_origin_y + row * pitch_y
         cell_boxes.append((gate.x, gate.y, gate.x + pdk.cell_width_um, gate.y + pdk.cell_height_um))
         cell, local_pins = _cell_shapes(gate, pdk)
