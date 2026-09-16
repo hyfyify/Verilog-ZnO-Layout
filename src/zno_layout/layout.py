@@ -170,8 +170,24 @@ def _astar_grid(
         def soft_score(candidate: list[tuple[int, int]]) -> int:
             if not soft_occupied:
                 return 0
-            return sum(1 for point in candidate if point in soft_occupied)
-        return min(fast_candidates, key=lambda candidate: (soft_score(candidate), len(candidate)))
+            score = 0
+            for x2, y2 in candidate:
+                if (x2, y2) in soft_occupied:
+                    score += max(1, soft_penalty * 2)
+                    continue
+                for delta in range(1, soft_radius + 1):
+                    if any(point in soft_occupied for point in (
+                        (x2 + delta, y2), (x2 - delta, y2),
+                        (x2, y2 + delta), (x2, y2 - delta),
+                    )):
+                        score += max(1, soft_penalty // delta)
+                        break
+            return score
+        best_fast = min(fast_candidates, key=lambda candidate: (soft_score(candidate), len(candidate)))
+        # A positive coupling score means A* may find an equally short offset
+        # path. Preserve the signal-integrity optimisation in that case.
+        if soft_score(best_fast) == 0:
+            return best_fast
 
     initial_h = abs(start[0] - goal[0]) + abs(start[1] - goal[1])
     # Prefer deeper nodes when f is tied. Without this tie-break, an empty
