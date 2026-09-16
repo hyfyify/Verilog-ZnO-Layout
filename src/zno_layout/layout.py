@@ -402,6 +402,7 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     pending.sort(key=lambda item: (
         0 if item[0] in {"$VDD", "$GND"} else 1,
         -fanout[item[0]],
+        tuple(-ord(char) for char in item[0]) if len(netlist.gates) <= 200 else (),
         -(abs(net_sources.get(item[0], item[1])[0] - item[1][0])
           + abs(net_sources.get(item[0], item[1])[1] - item[1][1])),
     ))
