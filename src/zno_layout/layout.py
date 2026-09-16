@@ -379,6 +379,9 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     tree_by_layer_net: dict[str, dict[str, set[tuple[int, int]]]] = {
         layer: {} for layer in routing_layers
     }
+    points_by_layer: dict[str, set[tuple[int, int]]] = {
+        layer: set() for layer in routing_layers
+    }
     net_layer: dict[str, str] = {}
     for route_index, (net, destination) in enumerate(pending):
         source = net_sources.get(net)
@@ -418,8 +421,8 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
                 other_layer = f"metal{other_level}"
                 if other_layer in occupied_by_layer:
                     adjacent_occupied.update(
-                        point for point, owner in occupied_by_layer[other_layer].items()
-                        if owner != net
+                        points_by_layer[other_layer]
+                        - tree_by_layer_net[other_layer].get(net, set())
                     )
             trial = _astar_grid(
                 trial_start, goal_grid, grid_width, grid_height,
@@ -461,6 +464,7 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         layer_forbidden = forbidden_by_layer[chosen_layer]
         for point in path:
             occupied_by_layer[chosen_layer][point] = net
+            points_by_layer[chosen_layer].add(point)
             layer_tree.add(point)
             px, py = point
             for ox in range(-clearance, clearance + 1):
