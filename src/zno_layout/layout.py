@@ -129,14 +129,15 @@ def _astar_grid(
     clearance: int = 1, max_expansions: int = 6_000,
     soft_occupied: set[tuple[int, int]] | None = None,
     soft_radius: int = 0, soft_penalty: int = 0,
+    forbidden_owners: dict[tuple[int, int], set[str]] | None = None,
 ) -> list[tuple[int, int]] | None:
     """Shortest four-neighbour route. Manhattan heuristic preserves optimality."""
-    forbidden: set[tuple[int, int]] = set()
-    for (px, py), owner in occupied.items():
-        if owner != net:
+    if forbidden_owners is None:
+        forbidden_owners = {}
+        for (px, py), owner in occupied.items():
             for ox in range(-clearance, clearance + 1):
                 for oy in range(-clearance, clearance + 1):
-                    forbidden.add((px + ox, py + oy))
+                    forbidden_owners.setdefault((px + ox, py + oy), set()).add(owner)
     initial_h = abs(start[0] - goal[0]) + abs(start[1] - goal[1])
     # Prefer deeper nodes when f is tied. Without this tie-break, an empty
     # 1280x960 canvas makes A* expand a huge diamond before following a direct
@@ -166,7 +167,8 @@ def _astar_grid(
                 if nxt in blocked:
                     continue
                 # A one-pixel empty halo prevents edge/corner contact between different nets.
-                if nxt in forbidden:
+                owners = forbidden_owners.get(nxt)
+                if owners and any(owner != net for owner in owners):
                     continue
             coupling_cost = 0
             if soft_occupied and soft_penalty:
@@ -369,6 +371,14 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     occupied_by_layer: dict[str, dict[tuple[int, int], str]] = {
         layer: {} for layer in routing_layers
     }
+    # Incremental indices avoid rebuilding clearance halos and scanning every
+    # routed point for every sink. This changes runtime, not routing legality.
+    forbidden_by_layer: dict[str, dict[tuple[int, int], set[str]]] = {
+        layer: {} for layer in routing_layers
+    }
+    tree_by_layer_net: dict[str, dict[str, set[tuple[int, int]]]] = {
+        layer: {} for layer in routing_layers
+    }
     net_layer: dict[str, str] = {}
     for route_index, (net, destination) in enumerate(pending):
         source = net_sources.get(net)
@@ -396,7 +406,7 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         for layer in candidates:
             occupied = occupied_by_layer[layer]
             trial_start = start_grid
-            same_net_tree = [point for point, owner in occupied.items() if owner == net]
+            same_net_tree = tree_by_layer_net[layer].get(net, ())
             if same_net_tree:
                 trial_start = min(
                     same_net_tree,
@@ -404,11 +414,12 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
                 )
             level = int(layer.removeprefix("metal"))
             adjacent_occupied: set[tuple[int, int]] = set()
-            for other_layer, other_occupied in occupied_by_layer.items():
-                other_level = int(other_layer.removeprefix("metal"))
-                if abs(other_level - level) == 1:
+            for other_level in (level - 1, level + 1):
+                other_layer = f"metal{other_level}"
+                if other_layer in occupied_by_layer:
                     adjacent_occupied.update(
-                        point for point, owner in other_occupied.items() if owner != net
+                        point for point, owner in occupied_by_layer[other_layer].items()
+                        if owner != net
                     )
             trial = _astar_grid(
                 trial_start, goal_grid, grid_width, grid_height,
@@ -416,6 +427,7 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
                 soft_occupied=adjacent_occupied,
                 soft_radius=pdk.interlayer_offset_p,
                 soft_penalty=pdk.coupling_penalty,
+                forbidden_owners=forbidden_by_layer[layer],
             )
             # Do not open a higher plane merely because the preferred
             # inter-layer offset made this plane expensive. Prove the same
@@ -424,6 +436,7 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
                 trial = _astar_grid(
                     trial_start, goal_grid, grid_width, grid_height,
                     set(), occupied, net, clearance,
+                    forbidden_owners=forbidden_by_layer[layer],
                 )
             if trial is not None:
                 path, chosen_layer = trial, layer
@@ -444,8 +457,15 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
             for via_layer in via_layers:
                 shapes.append(Rect(via_layer, vx * pixel, vy * pixel,
                                    (vx + 1) * pixel, (vy + 1) * pixel, net))
+        layer_tree = tree_by_layer_net[chosen_layer].setdefault(net, set())
+        layer_forbidden = forbidden_by_layer[chosen_layer]
         for point in path:
             occupied_by_layer[chosen_layer][point] = net
+            layer_tree.add(point)
+            px, py = point
+            for ox in range(-clearance, clearance + 1):
+                for oy in range(-clearance, clearance + 1):
+                    layer_forbidden.setdefault((px + ox, py + oy), set()).add(net)
         routes.append((net, chosen_source, destination))
 
     # The greedy tree router may revisit a branch endpoint. One physical via
