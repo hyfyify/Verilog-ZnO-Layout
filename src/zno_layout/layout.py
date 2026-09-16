@@ -138,6 +138,41 @@ def _astar_grid(
             for ox in range(-clearance, clearance + 1):
                 for oy in range(-clearance, clearance + 1):
                     forbidden_owners.setdefault((px + ox, py + oy), set()).add(owner)
+    def straight(a: tuple[int, int], b: tuple[int, int]) -> list[tuple[int, int]]:
+        if a[0] == b[0]:
+            step = 1 if b[1] >= a[1] else -1
+            return [(a[0], y) for y in range(a[1], b[1] + step, step)]
+        step = 1 if b[0] >= a[0] else -1
+        return [(x, a[1]) for x in range(a[0], b[0] + step, step)]
+
+    def legal(candidate: list[tuple[int, int]]) -> bool:
+        for point in candidate:
+            if not (0 <= point[0] < width and 0 <= point[1] < height):
+                return False
+            if point in {start, goal}:
+                continue
+            if point in blocked:
+                return False
+            owners = forbidden_owners.get(point)
+            if owners and any(owner != net for owner in owners):
+                return False
+        return True
+
+    # Most routes need no graph search. Test both shortest orthogonal L shapes;
+    # fall back to A* only when real obstacles block them.
+    elbows = ((goal[0], start[1]), (start[0], goal[1]))
+    fast_candidates: list[list[tuple[int, int]]] = []
+    for elbow in elbows:
+        candidate = straight(start, elbow) + straight(elbow, goal)[1:]
+        if legal(candidate):
+            fast_candidates.append(candidate)
+    if fast_candidates:
+        def soft_score(candidate: list[tuple[int, int]]) -> int:
+            if not soft_occupied:
+                return 0
+            return sum(1 for point in candidate if point in soft_occupied)
+        return min(fast_candidates, key=lambda candidate: (soft_score(candidate), len(candidate)))
+
     initial_h = abs(start[0] - goal[0]) + abs(start[1] - goal[1])
     # Prefer deeper nodes when f is tied. Without this tie-break, an empty
     # 1280x960 canvas makes A* expand a huge diamond before following a direct
