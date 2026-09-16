@@ -50,13 +50,13 @@ endmodule</textarea>
 </section>
 </main>
 <script>
-const $=id=>document.getElementById(id);let last={svg:"",report:""};
+const $=id=>document.getElementById(id);let last={svg:"",report:""},previewUrl="";
 function blobDownload(text,type,name){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===b.dataset.tab))});
 $("file").onclick=()=>$("pick").click();$("pick").onchange=async()=>{const f=$("pick").files[0];if(f)$("source").value=await f.text()};
 $("compile").onclick=async()=>{const btn=$("compile"),status=$("status");btn.disabled=true;btn.textContent="編譯中…";status.className="status";status.textContent="正在綜合、配置與繞線，請保持頁面開啟。";
 try{const r=await fetch("/api/compile",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:$("source").value,top:$("top").value})});const d=await r.json();if(d.error)throw new Error(d.error);
-last=d;$("report").textContent=d.report;$("json").textContent=JSON.stringify(d.netlist,null,2);$("frame").srcdoc=d.svg||"<h2 style='color:#b91c1c;font-family:sans-serif'>DRC 失敗，請查看報告</h2>";
+last=d;$("report").textContent=d.report;$("json").textContent=JSON.stringify(d.netlist,null,2);if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=""}if(d.svg){previewUrl=URL.createObjectURL(new Blob([d.svg],{type:"image/svg+xml;charset=utf-8"}));$("frame").removeAttribute("srcdoc");$("frame").src=previewUrl}else{$("frame").removeAttribute("src");$("frame").srcdoc="<h2 style='color:#b91c1c;font-family:sans-serif'>DRC 失敗，請查看報告</h2>"};
 status.className="status "+(d.ok?"ok":"bad");status.textContent=d.ok?"編譯成功：0 DRC errors":"編譯完成，但 DRC 未通過；未輸出不可工作的版圖。";$("svgDownload").disabled=!d.svg;$("reportDownload").disabled=false;
 }catch(e){status.className="status bad";status.textContent="編譯失敗："+e.message}finally{btn.disabled=false;btn.textContent="開始編譯"}};
 $("svgDownload").onclick=()=>blobDownload(last.svg,"image/svg+xml","layout.svg");$("reportDownload").onclick=()=>blobDownload(last.report,"text/plain","drc_report.txt");
