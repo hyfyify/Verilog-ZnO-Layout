@@ -11,6 +11,7 @@ from zno_layout.layout import _astar_grid, _cell_shapes, _touches, place_and_rou
 from zno_layout.layout import _rram_shapes
 from zno_layout.model import Gate
 from zno_layout.pdk import PDK
+from zno_layout.physical import analyze_physical, physical_drc, scan_routing_layers
 from zno_layout.techmap import expand_to_nmos_primitives, prune_unused_logic
 from zno_layout.verilog import parse_assign_verilog, run_yosys
 
@@ -43,6 +44,9 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(pdk.tft_width_p, 2)
         self.assertEqual(pdk.cells["NAND"]["tft_count"], 3)
         self.assertEqual(pdk.rram_bits_per_zno, 1)
+        self.assertGreater(pdk.layer_activation_penalty, pdk.via_penalty)
+        self.assertEqual(pdk.interlayer_offset_p, 2)
+        self.assertGreaterEqual(pdk.external_pad_size_um, 100.0)
 
     def test_compile_creates_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -51,6 +55,7 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertTrue((output / "layout.svg").exists())
             self.assertTrue((output / "mask_zno.png").exists())
+            self.assertFalse((output / "mask_metal24.png").exists())
             parsed = json.loads((output / "netlist.json").read_text())
             self.assertEqual(len(parsed["gates"]), 3)
 
@@ -171,6 +176,34 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(path) - 1, 8)
         self.assertTrue(all(abs(a[0] - b[0]) + abs(a[1] - b[1]) == 1 for a, b in zip(path, path[1:])))
 
+
+    def test_adjacent_layer_overlap_is_a_soft_routing_penalty(self):
+        direct = _astar_grid((0, 2), (6, 2), 8, 6, set(), {}, "n")
+        offset = _astar_grid(
+            (0, 2), (6, 2), 8, 6, set(), {}, "n",
+            soft_occupied={(x, 2) for x in range(1, 6)},
+            soft_radius=2, soft_penalty=8,
+        )
+        self.assertEqual(len(direct) - 1, 6)
+        self.assertTrue(any(y != 2 for _, y in offset[1:-1]))
+
+    def test_physical_metrics_cover_bus_capacitance_and_core_area(self):
+        pdk = PDK.load(ROOT / "pdk/default.json")
+        design = expand_to_nmos_primitives(parse_assign_verilog(
+            "module m(input wire A0, input wire A1, output wire Y0, output wire Y1); "
+            "assign Y0=~A0; assign Y1=~A1; endmodule"
+        ))
+        layout = place_and_route(design, pdk)
+        metrics = analyze_physical(layout, design, pdk)
+        self.assertGreater(metrics.core_area_um2, 0)
+        self.assertGreater(metrics.total_wire_length_p, 0)
+        self.assertIn("Y", metrics.bus_skew_p)
+        self.assertTrue(metrics.net_capacitance_ff)
+        self.assertGreater(metrics.routing_cost, metrics.total_wire_length_p)
+        self.assertTrue(metrics.layer_utilization)
+        self.assertEqual(physical_drc(metrics, pdk), [])
+        self.assertEqual(scan_routing_layers(layout, pdk), [])
+
     def test_all_metal_edges_are_on_pixel_grid(self):
         pdk = PDK.load(ROOT / "pdk/default.json")
         design = expand_to_nmos_primitives(parse_assign_verilog(
@@ -216,8 +249,10 @@ class PipelineTests(unittest.TestCase):
         layout = place_and_route(design, pdk)
         self.assertEqual(run_drc(layout, pdk), [])
         used = {shape.layer for shape in layout.shapes}
-        self.assertTrue({"metal2", "metal3", "metal4"} <= used)
-        self.assertTrue({"via12", "via23", "via34"} <= used)
+        self.assertIn("metal2", used)
+        highest = max(int(layer.removeprefix("metal"))
+                      for layer in used if layer.startswith("metal"))
+        self.assertLessEqual(highest, 24)
 
     def test_nor_gate_inputs_do_not_short_output_or_ground(self):
         from zno_layout.verilog import run_yosys
@@ -271,9 +306,31 @@ class PipelineTests(unittest.TestCase):
         pin0 = layout.pins["A0"]
         self.assertTrue(math.isclose(pin0[0], pdk.canvas_width_um / 2 + pdk.pixel_pitch_um / 2,
                                      abs_tol=pdk.pixel_pitch_um))
-        self.assertTrue(math.isclose(pin0[1], pdk.pixel_pitch_um / 2,
-                                     abs_tol=1e-6))
+        self.assertTrue(math.isclose(
+            pin0[1], math.ceil(pdk.external_pad_size_um / pdk.pixel_pitch_um)
+            * pdk.pixel_pitch_um / 2, abs_tol=1e-6,
+        ))
+        pin0_pad = next(shape for shape in layout.shapes if shape.label == "PIN0:A0")
+        self.assertEqual(pin0_pad.y1, 0)
+        self.assertGreaterEqual(pin0_pad.width, 100.0)
+        self.assertTrue(math.isclose(pin0_pad.width, pin0_pad.height, abs_tol=1e-6))
         self.assertEqual(run_drc(layout, pdk), [])
+        self.assertEqual(scan_routing_layers(layout, pdk), [])
+        via_keys = [
+            (shape.layer, shape.x1, shape.y1, shape.label)
+            for shape in layout.shapes if shape.layer.startswith("via")
+        ]
+        self.assertEqual(len(via_keys), len(set(via_keys)))
+        metrics = analyze_physical(layout, mapped, pdk)
+        print(
+            "ALU_PHYSICAL "
+            f"core_um2={metrics.core_area_um2:.2f} "
+            f"highest_metal={metrics.highest_metal} "
+            f"vias={metrics.via_count} "
+            f"wire_p={metrics.total_wire_length_p} "
+            f"overlap_p={metrics.adjacent_layer_overlap_p} "
+            f"bus_skew={metrics.bus_skew_p}"
+        )
 
 
 if __name__ == "__main__":

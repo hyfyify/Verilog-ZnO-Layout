@@ -44,7 +44,8 @@ def write_masks(layout: Layout, pdk: PDK, directory: str | Path) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     sx = pdk.image_width_px / layout.width
     sy = pdk.image_height_px / layout.height
-    for layer in pdk.layers:
+    used_layers = {shape.layer for shape in layout.shapes}
+    for layer in (layer for layer in pdk.layers if layer in used_layers):
         pixels = bytearray(pdk.image_width_px * pdk.image_height_px)
         for shape in (s for s in layout.shapes if s.layer == layer):
             x1, x2 = max(0, int(shape.x1 * sx)), min(pdk.image_width_px, max(1, int(shape.x2 * sx)))
