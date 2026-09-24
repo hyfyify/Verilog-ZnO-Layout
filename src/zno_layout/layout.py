@@ -749,4 +749,3 @@ def run_drc(layout: Layout, pdk: PDK) -> list[str]:
             if first.layer == second.layer and first.label != second.label and _touches(first, second):
                 errors.append(f"E_SHORT {first.label} touches {second.label}")
     return errors
-e21d2aa9b0cdba1bd5a3fbc310626580da750f3c
