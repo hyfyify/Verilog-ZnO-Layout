@@ -269,6 +269,76 @@ def _path_rects(path: list[tuple[int, int]], pixel: float, net: str,
     return result
 
 
+def _local_bridge_route(
+    start: tuple[int, int], goal: tuple[int, int], width: int, height: int,
+    net: str, clearance: int,
+    base_forbidden: dict[tuple[int, int], set[str]],
+    bridge_forbidden: dict[tuple[int, int], set[str]],
+    bridge_layer: str = "metal3",
+) -> tuple[list[tuple[str, list[tuple[int, int]]]], list[tuple[int, int]]] | None:
+    """Keep a route on metal2 and lift only conflicting spans onto one bridge plane."""
+    conflicts = {
+        point for point, owners in base_forbidden.items()
+        if any(owner != net for owner in owners)
+    }
+    path = _astar_grid(
+        start, goal, width, height, set(), {}, net, clearance,
+        max_expansions=20_000,
+        soft_occupied=conflicts,
+        soft_radius=0,
+        soft_penalty=8,
+        forbidden_owners={},
+    )
+    if not path or len(path) < 2:
+        return None
+    conflict_indices = [
+        index for index, point in enumerate(path)
+        if index not in {0, len(path) - 1}
+        and any(owner != net for owner in base_forbidden.get(point, ()))
+    ]
+    if not conflict_indices:
+        return [("metal2", path)], []
+
+    bridge_edges: set[int] = set()
+    run_start = run_end = conflict_indices[0]
+    runs: list[tuple[int, int]] = []
+    for index in conflict_indices[1:]:
+        if index == run_end + 1:
+            run_end = index
+        else:
+            runs.append((run_start, run_end))
+            run_start = run_end = index
+    runs.append((run_start, run_end))
+    for first, last in runs:
+        # Include one legal landing point on both sides so each bridge has a
+        # real via and never merely touches the lower conductor edge-to-edge.
+        for edge in range(max(0, first - 1), min(len(path) - 1, last + 1)):
+            bridge_edges.add(edge)
+
+    for edge in bridge_edges:
+        for point in (path[edge], path[edge + 1]):
+            owners = bridge_forbidden.get(point)
+            if owners and any(owner != net for owner in owners):
+                return None
+
+    segments: list[tuple[str, list[tuple[int, int]]]] = []
+    vias: list[tuple[int, int]] = []
+    current_layer = bridge_layer if 0 in bridge_edges else "metal2"
+    current_path = [path[0]]
+    for edge in range(len(path) - 1):
+        layer = bridge_layer if edge in bridge_edges else "metal2"
+        if layer != current_layer:
+            transition = path[edge]
+            current_path.append(transition) if current_path[-1] != transition else None
+            segments.append((current_layer, current_path))
+            vias.append(transition)
+            current_layer = layer
+            current_path = [transition]
+        current_path.append(path[edge + 1])
+    segments.append((current_layer, current_path))
+    return segments, vias
+
+
 def _die_pin_point(number: int, count: int, pdk: PDK) -> tuple[float, float]:
     """Uniform clockwise perimeter placement; DIE pin 0 is top-centre."""
     width, height = pdk.image_width_px, pdk.image_height_px
@@ -434,6 +504,21 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     points_by_layer: dict[str, set[tuple[int, int]]] = {
         layer: set() for layer in routing_layers
     }
+    # A via is conductive on its own mask too.  Keep an explicit clearance
+    # index so two otherwise legal routes cannot place unlike-net vias on
+    # touching pixels (a real short that metal-only occupancy cannot see).
+    via23_forbidden: dict[tuple[int, int], set[str]] = {}
+    # Keep local layer-change vias away from every fixed pin.  A later branch
+    # may have no freedom to move its endpoint via, whereas a bridge landing
+    # can always be shifted along the route.
+    fixed_pin_keepout: set[tuple[int, int]] = set()
+    fixed_points = list(net_sources.values()) + [destination for _, destination in pending]
+    pin_clearance = max(1, math.ceil(pdk.min_spacing_um / pixel))
+    for point_x, point_y in fixed_points:
+        gx, gy = int(point_x // pixel), int(point_y // pixel)
+        for ox in range(-pin_clearance, pin_clearance + 1):
+            for oy in range(-pin_clearance, pin_clearance + 1):
+                fixed_pin_keepout.add((gx + ox, gy + oy))
     net_layer: dict[str, str] = {}
     for route_index, (net, destination) in enumerate(pending):
         source = net_sources.get(net)
@@ -456,6 +541,8 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         else:
             candidates = routing_layers
         path = None
+        bridge_segments: list[tuple[str, list[tuple[int, int]]]] | None = None
+        bridge_vias: list[tuple[tuple[int, int], int]] = []
         chosen_layer = ""
         chosen_source = source
         for layer in candidates:
@@ -493,35 +580,87 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
                     set(), occupied, net, clearance,
                     forbidden_owners=forbidden_by_layer[layer],
                 )
+            if trial is None and layer == "metal2":
+                # Try short bridges on each overflow plane before moving the
+                # entire branch upstairs.  This makes added layers contain
+                # crossings only, instead of thousands of empty pixels around
+                # a full-length escape wire.
+                for bridge_layer in routing_layers[1:]:
+                    bridged = _local_bridge_route(
+                        trial_start, goal_grid, grid_width, grid_height, net,
+                        clearance, forbidden_by_layer["metal2"],
+                        forbidden_by_layer[bridge_layer], bridge_layer,
+                    )
+                    if bridged is None:
+                        continue
+                    trial_segments, trial_points = bridged
+                    endpoint_vias = []
+                    if trial_segments[0][0] != "metal2" and trial_start == start_grid:
+                        endpoint_vias.append(trial_start)
+                    if trial_segments[-1][0] != "metal2":
+                        endpoint_vias.append(goal_grid)
+                    all_trial_vias = trial_points + endpoint_vias
+                    if any(
+                        any(owner != net for owner in via23_forbidden.get(point, ()))
+                        for point in all_trial_vias
+                    ) or any(point in fixed_pin_keepout for point in trial_points):
+                        continue
+                    bridge_segments = trial_segments
+                    bridge_level = int(bridge_layer.removeprefix("metal"))
+                    bridge_vias = [(point, bridge_level) for point in trial_points]
+                    chosen_layer = "metal2"
+                    chosen_source = ((trial_start[0] + 0.5) * pixel,
+                                     (trial_start[1] + 0.5) * pixel)
+                    break
+                if bridge_segments is not None:
+                    break
             if trial is not None:
                 path, chosen_layer = trial, layer
                 chosen_source = ((trial_start[0] + 0.5) * pixel,
                                  (trial_start[1] + 0.5) * pixel)
                 break
-        if path is None:
+        if path is None and bridge_segments is None:
             unrouted.append(f"{net}: no p-grid path from {source} to {destination}")
             continue
         net_layer[net] = chosen_layer
-        shapes.extend(_path_rects(path, pixel, net, chosen_layer))
+        routed_segments = bridge_segments or [(chosen_layer, path)]
+        for segment_layer, segment_path in routed_segments:
+            shapes.extend(_path_rects(segment_path, pixel, net, segment_layer))
         # Vias are emitted at real cell/pad endpoints. Branches that begin on an
         # existing same-net tree need only the destination via.
         via_points = [goal_grid] if chosen_source != source else [start_grid, goal_grid]
-        for vx, vy in via_points:
-            target_level = int(chosen_layer.removeprefix("metal"))
+        endpoint_layers = [routed_segments[-1][0]] if chosen_source != source else [
+            routed_segments[0][0], routed_segments[-1][0]
+        ]
+        for (vx, vy), endpoint_layer in zip(via_points, endpoint_layers):
+            target_level = int(endpoint_layer.removeprefix("metal"))
             via_layers = tuple(f"via{level}{level + 1}" for level in range(1, target_level))
             for via_layer in via_layers:
                 shapes.append(Rect(via_layer, vx * pixel, vy * pixel,
                                    (vx + 1) * pixel, (vy + 1) * pixel, net))
-        layer_tree = tree_by_layer_net[chosen_layer].setdefault(net, set())
-        layer_forbidden = forbidden_by_layer[chosen_layer]
-        for point in path:
-            occupied_by_layer[chosen_layer][point] = net
-            points_by_layer[chosen_layer].add(point)
-            layer_tree.add(point)
-            px, py = point
+                if via_layer == "via23":
+                    for ox in range(-clearance, clearance + 1):
+                        for oy in range(-clearance, clearance + 1):
+                            via23_forbidden.setdefault((vx + ox, vy + oy), set()).add(net)
+        for (vx, vy), bridge_level in bridge_vias:
+            for level in range(2, bridge_level):
+                via_layer = f"via{level}{level + 1}"
+                shapes.append(Rect(via_layer, vx * pixel, vy * pixel,
+                                   (vx + 1) * pixel, (vy + 1) * pixel, net))
             for ox in range(-clearance, clearance + 1):
                 for oy in range(-clearance, clearance + 1):
-                    layer_forbidden.setdefault((px + ox, py + oy), set()).add(net)
+                    via23_forbidden.setdefault((vx + ox, vy + oy), set()).add(net)
+        for segment_layer, segment_path in routed_segments:
+            layer_tree = tree_by_layer_net[segment_layer].setdefault(net, set())
+            layer_forbidden = forbidden_by_layer[segment_layer]
+            for point in segment_path:
+                occupied_by_layer[segment_layer][point] = net
+                points_by_layer[segment_layer].add(point)
+                layer_tree.add(point)
+                px, py = point
+                for ox in range(-clearance, clearance + 1):
+                    for oy in range(-clearance, clearance + 1):
+                        layer_forbidden.setdefault((px + ox, py + oy), set()).add(net)
         routes.append((net, chosen_source, destination))
 
     # The greedy tree router may revisit a branch endpoint. One physical via
@@ -610,3 +749,4 @@ def run_drc(layout: Layout, pdk: PDK) -> list[str]:
             if first.layer == second.layer and first.label != second.label and _touches(first, second):
                 errors.append(f"E_SHORT {first.label} touches {second.label}")
     return errors
+e21d2aa9b0cdba1bd5a3fbc310626580da750f3c
