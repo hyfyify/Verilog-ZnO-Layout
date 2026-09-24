@@ -552,7 +552,10 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
             if same_net_tree:
                 trial_start = min(
                     same_net_tree,
-                    key=lambda point: abs(point[0] - goal_grid[0]) + abs(point[1] - goal_grid[1]),
+                    key=lambda point: (
+                        abs(point[0] - goal_grid[0]) + abs(point[1] - goal_grid[1]),
+                        point[0], point[1],
+                    ),
                 )
             level = int(layer.removeprefix("metal"))
             adjacent_occupied: set[tuple[int, int]] = set()
