@@ -46,19 +46,21 @@ endmodule</textarea>
 <div id="preview" class="panel active"><div class="viewer"><iframe id="frame" title="Layout preview"></iframe></div></div>
 <div id="drc" class="panel"><pre id="report">尚未編譯</pre></div>
 <div id="netlist" class="panel"><pre id="json">尚未編譯</pre></div>
-<div class="downloads"><button id="svgDownload" disabled>下載 SVG</button><button id="reportDownload" disabled>下載 DRC</button></div>
+<div class="downloads"><button id="exposure" disabled>第二螢幕全螢幕</button><button id="svgDownload" disabled>下載 SVG</button><button id="reportDownload" disabled>下載 DRC</button></div>
 </section>
 </main>
 <script>
-const $=id=>document.getElementById(id);let last={svg:"",report:""};
+const $=id=>document.getElementById(id);let last={svg:"",report:""},previewUrl="";
 function blobDownload(text,type,name){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+function exposureSvg(text){const doc=new DOMParser().parseFromString(text,"image/svg+xml"),svg=doc.documentElement;svg.setAttribute("width","100%");svg.setAttribute("height","100%");svg.setAttribute("preserveAspectRatio","none");svg.querySelectorAll("title,text").forEach(node=>node.remove());const shapes=svg.querySelectorAll("rect");shapes.forEach((shape,index)=>{shape.setAttribute("fill",index===0?"#0000ff":"#000000");shape.setAttribute("fill-opacity","1")});return new XMLSerializer().serializeToString(svg)}
+async function openExposure(){if(!last.svg)return;const image=exposureSvg(last.svg),page=`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#0000ff}svg{display:block;width:100vw;height:100vh}</style></head><body>${image}<script>addEventListener("load",()=>document.documentElement.requestFullscreen?.().catch(()=>{}));<\/script></body></html>`,url=URL.createObjectURL(new Blob([page],{type:"text/html;charset=utf-8"}));let options="popup=yes";try{if("getScreenDetails" in window){const details=await getScreenDetails(),screen=details.screens.find(item=>!item.isPrimary);if(screen)options+=`,left=${screen.left},top=${screen.top},width=${screen.width},height=${screen.height}`}}catch(_){}const output=window.open(url,"znoExposure",options);if(output){output.focus();setTimeout(()=>URL.revokeObjectURL(url),60000)}}
 document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===b.dataset.tab))});
 $("file").onclick=()=>$("pick").click();$("pick").onchange=async()=>{const f=$("pick").files[0];if(f)$("source").value=await f.text()};
 $("compile").onclick=async()=>{const btn=$("compile"),status=$("status");btn.disabled=true;btn.textContent="編譯中…";status.className="status";status.textContent="正在綜合、配置與繞線，請保持頁面開啟。";
 try{const r=await fetch("/api/compile",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:$("source").value,top:$("top").value})});const d=await r.json();if(d.error)throw new Error(d.error);
-last=d;$("report").textContent=d.report;$("json").textContent=JSON.stringify(d.netlist,null,2);$("frame").srcdoc=d.svg||"<h2 style='color:#b91c1c;font-family:sans-serif'>DRC 失敗，請查看報告</h2>";
-status.className="status "+(d.ok?"ok":"bad");status.textContent=d.ok?"編譯成功：0 DRC errors":"編譯完成，但 DRC 未通過；未輸出不可工作的版圖。";$("svgDownload").disabled=!d.svg;$("reportDownload").disabled=false;
+last=d;$("report").textContent=d.report;$("json").textContent=JSON.stringify(d.netlist,null,2);if(previewUrl){URL.revokeObjectURL(previewUrl);previewUrl=""}if(d.svg){previewUrl=URL.createObjectURL(new Blob([d.svg],{type:"image/svg+xml;charset=utf-8"}));$("frame").removeAttribute("srcdoc");$("frame").src=previewUrl}else{$("frame").removeAttribute("src");$("frame").srcdoc="<h2 style='color:#b91c1c;font-family:sans-serif'>DRC 失敗，請查看報告</h2>"};
+status.className="status "+(d.ok?"ok":"bad");status.textContent=d.ok?"編譯成功：0 DRC errors":"編譯完成，但 DRC 未通過；未輸出不可工作的版圖。";$("exposure").disabled=!d.svg;$("svgDownload").disabled=!d.svg;$("reportDownload").disabled=false;
 }catch(e){status.className="status bad";status.textContent="編譯失敗："+e.message}finally{btn.disabled=false;btn.textContent="開始編譯"}};
-$("svgDownload").onclick=()=>blobDownload(last.svg,"image/svg+xml","layout.svg");$("reportDownload").onclick=()=>blobDownload(last.report,"text/plain","drc_report.txt");
+$("exposure").onclick=openExposure;$("svgDownload").onclick=()=>blobDownload(last.svg,"image/svg+xml","layout.svg");$("reportDownload").onclick=()=>blobDownload(last.report,"text/plain","drc_report.txt");
 </script>
 </body></html>

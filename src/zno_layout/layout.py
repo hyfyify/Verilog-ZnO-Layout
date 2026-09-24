@@ -127,14 +127,68 @@ def _astar_grid(
     start: tuple[int, int], goal: tuple[int, int], width: int, height: int,
     blocked: set[tuple[int, int]], occupied: dict[tuple[int, int], str], net: str,
     clearance: int = 1, max_expansions: int = 6_000,
+    soft_occupied: set[tuple[int, int]] | None = None,
+    soft_radius: int = 0, soft_penalty: int = 0,
+    forbidden_owners: dict[tuple[int, int], set[str]] | None = None,
 ) -> list[tuple[int, int]] | None:
     """Shortest four-neighbour route. Manhattan heuristic preserves optimality."""
-    forbidden: set[tuple[int, int]] = set()
-    for (px, py), owner in occupied.items():
-        if owner != net:
+    if forbidden_owners is None:
+        forbidden_owners = {}
+        for (px, py), owner in occupied.items():
             for ox in range(-clearance, clearance + 1):
                 for oy in range(-clearance, clearance + 1):
-                    forbidden.add((px + ox, py + oy))
+                    forbidden_owners.setdefault((px + ox, py + oy), set()).add(owner)
+    def straight(a: tuple[int, int], b: tuple[int, int]) -> list[tuple[int, int]]:
+        if a[0] == b[0]:
+            step = 1 if b[1] >= a[1] else -1
+            return [(a[0], y) for y in range(a[1], b[1] + step, step)]
+        step = 1 if b[0] >= a[0] else -1
+        return [(x, a[1]) for x in range(a[0], b[0] + step, step)]
+
+    def legal(candidate: list[tuple[int, int]]) -> bool:
+        for point in candidate:
+            if not (0 <= point[0] < width and 0 <= point[1] < height):
+                return False
+            if point in {start, goal}:
+                continue
+            if point in blocked:
+                return False
+            owners = forbidden_owners.get(point)
+            if owners and any(owner != net for owner in owners):
+                return False
+        return True
+
+    # Most routes need no graph search. Test both shortest orthogonal L shapes;
+    # fall back to A* only when real obstacles block them.
+    elbows = ((goal[0], start[1]), (start[0], goal[1]))
+    fast_candidates: list[list[tuple[int, int]]] = []
+    for elbow in elbows:
+        candidate = straight(start, elbow) + straight(elbow, goal)[1:]
+        if legal(candidate):
+            fast_candidates.append(candidate)
+    if fast_candidates:
+        def soft_score(candidate: list[tuple[int, int]]) -> int:
+            if not soft_occupied:
+                return 0
+            score = 0
+            for x2, y2 in candidate:
+                if (x2, y2) in soft_occupied:
+                    score += max(1, soft_penalty * 2)
+                    continue
+                for delta in range(1, soft_radius + 1):
+                    if any(point in soft_occupied for point in (
+                        (x2 + delta, y2), (x2 - delta, y2),
+                        (x2, y2 + delta), (x2, y2 - delta),
+                    )):
+                        score += max(1, soft_penalty // delta)
+                        break
+            return score
+        best_fast = min(fast_candidates, key=lambda candidate: (soft_score(candidate), len(candidate)))
+        # A positive coupling score means A* may find an equally short offset
+        # path. Preserve the signal-integrity optimisation in that case.
+        if soft_score(best_fast) == 0:
+            return best_fast
+
     initial_h = abs(start[0] - goal[0]) + abs(start[1] - goal[1])
     # Prefer deeper nodes when f is tied. Without this tie-break, an empty
     # 1280x960 canvas makes A* expand a huge diamond before following a direct
@@ -164,9 +218,25 @@ def _astar_grid(
                 if nxt in blocked:
                     continue
                 # A one-pixel empty halo prevents edge/corner contact between different nets.
-                if nxt in forbidden:
+                owners = forbidden_owners.get(nxt)
+                if owners and any(owner != net for owner in owners):
                     continue
-            candidate = distance + 1
+            coupling_cost = 0
+            if soft_occupied and soft_penalty:
+                x2, y2 = nxt
+                # Penalise exact broadside overlap most strongly and nearby
+                # parallel adjacency less strongly. It remains a soft cost so
+                # routing cannot fail solely because ideal offset is impossible.
+                if nxt in soft_occupied:
+                    coupling_cost = soft_penalty * 2
+                else:
+                    for delta in range(1, soft_radius + 1):
+                        if ((x2 + delta, y2) in soft_occupied
+                                or (x2 - delta, y2) in soft_occupied
+                                or (x2, y2 + delta) in soft_occupied
+                                or (x2, y2 - delta) in soft_occupied):
+                            coupling_cost = max(coupling_cost, soft_penalty // delta)
+            candidate = distance + 1 + coupling_cost
             if candidate < cost.get(nxt, 1 << 60):
                 cost[nxt] = candidate
                 parent[nxt] = point
@@ -199,6 +269,76 @@ def _path_rects(path: list[tuple[int, int]], pixel: float, net: str,
     return result
 
 
+def _local_bridge_route(
+    start: tuple[int, int], goal: tuple[int, int], width: int, height: int,
+    net: str, clearance: int,
+    base_forbidden: dict[tuple[int, int], set[str]],
+    bridge_forbidden: dict[tuple[int, int], set[str]],
+    bridge_layer: str = "metal3",
+) -> tuple[list[tuple[str, list[tuple[int, int]]]], list[tuple[int, int]]] | None:
+    """Keep a route on metal2 and lift only conflicting spans onto one bridge plane."""
+    conflicts = {
+        point for point, owners in base_forbidden.items()
+        if any(owner != net for owner in owners)
+    }
+    path = _astar_grid(
+        start, goal, width, height, set(), {}, net, clearance,
+        max_expansions=20_000,
+        soft_occupied=conflicts,
+        soft_radius=0,
+        soft_penalty=8,
+        forbidden_owners={},
+    )
+    if not path or len(path) < 2:
+        return None
+    conflict_indices = [
+        index for index, point in enumerate(path)
+        if index not in {0, len(path) - 1}
+        and any(owner != net for owner in base_forbidden.get(point, ()))
+    ]
+    if not conflict_indices:
+        return [("metal2", path)], []
+
+    bridge_edges: set[int] = set()
+    run_start = run_end = conflict_indices[0]
+    runs: list[tuple[int, int]] = []
+    for index in conflict_indices[1:]:
+        if index == run_end + 1:
+            run_end = index
+        else:
+            runs.append((run_start, run_end))
+            run_start = run_end = index
+    runs.append((run_start, run_end))
+    for first, last in runs:
+        # Include one legal landing point on both sides so each bridge has a
+        # real via and never merely touches the lower conductor edge-to-edge.
+        for edge in range(max(0, first - 1), min(len(path) - 1, last + 1)):
+            bridge_edges.add(edge)
+
+    for edge in bridge_edges:
+        for point in (path[edge], path[edge + 1]):
+            owners = bridge_forbidden.get(point)
+            if owners and any(owner != net for owner in owners):
+                return None
+
+    segments: list[tuple[str, list[tuple[int, int]]]] = []
+    vias: list[tuple[int, int]] = []
+    current_layer = bridge_layer if 0 in bridge_edges else "metal2"
+    current_path = [path[0]]
+    for edge in range(len(path) - 1):
+        layer = bridge_layer if edge in bridge_edges else "metal2"
+        if layer != current_layer:
+            transition = path[edge]
+            current_path.append(transition) if current_path[-1] != transition else None
+            segments.append((current_layer, current_path))
+            vias.append(transition)
+            current_layer = layer
+            current_path = [transition]
+        current_path.append(path[edge + 1])
+    segments.append((current_layer, current_path))
+    return segments, vias
+
+
 def _die_pin_point(number: int, count: int, pdk: PDK) -> tuple[float, float]:
     """Uniform clockwise perimeter placement; DIE pin 0 is top-centre."""
     width, height = pdk.image_width_px, pdk.image_height_px
@@ -224,9 +364,16 @@ def _die_pin_point(number: int, count: int, pdk: PDK) -> tuple[float, float]:
 
 def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     pixel = pdk.pixel_pitch_um
-    margin = 2 * pixel
-    usable = pdk.canvas_width_um - 2 * margin
-    per_row = max(1, int(usable // (pdk.cell_width_um + pdk.row_spacing_um)))
+    clearance_um = max(pdk.min_spacing_um, pixel)
+    # The complete rectangle inside the perimeter contact-pad ring is legal
+    # placement/routing area. Sparse designs deliberately use that area to
+    # relieve local channel congestion before paying for another metal mask.
+    margin = math.ceil((pdk.external_pad_size_um + clearance_um) / pixel) * pixel
+    usable = max(pdk.cell_width_um, pdk.canvas_width_um - 2 * margin)
+    usable_height = max(pdk.cell_height_um, pdk.canvas_height_um - 2 * margin)
+    max_per_row = max(1, int(usable // (pdk.cell_width_um + pdk.min_spacing_um)))
+    aspect = usable / usable_height
+    per_row = max(1, min(max_per_row, math.ceil(math.sqrt(max(1, len(netlist.gates)) * aspect))))
     shapes, rram_boxes = _rram_shapes(netlist, pdk)
     net_sources: dict[str, tuple[int, int]] = {}
     pending: list[tuple[str, tuple[int, int]]] = []
@@ -234,18 +381,28 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     unrouted: list[str] = []
 
     row_count = max(1, math.ceil(len(netlist.gates) / per_row))
-    vertical_gap = max(pdk.row_spacing_um, math.floor(
-        (pdk.canvas_height_um - row_count * pdk.cell_height_um) / (row_count + 1) / pixel
-    ) * pixel)
+    pitch_y = (
+        0.0 if row_count <= 1 else
+        math.floor((usable_height - pdk.cell_height_um) / (row_count - 1) / pixel) * pixel
+    )
+    pitch_y = max(pdk.cell_height_um + pdk.min_spacing_um, pitch_y) if row_count > 1 else 0.0
+    core_origin_y = margin
     cell_boxes: list[tuple[float, float, float, float]] = list(rram_boxes)
     for index, gate in enumerate(netlist.gates):
         row, column = divmod(index, per_row)
         cells_this_row = min(per_row, len(netlist.gates) - row * per_row)
-        horizontal_gap = max(pdk.min_spacing_um, math.floor(
-            (pdk.canvas_width_um - cells_this_row * pdk.cell_width_um) / (cells_this_row + 1) / pixel
-        ) * pixel)
-        gate.x = horizontal_gap + column * (pdk.cell_width_um + horizontal_gap)
-        gate.y = vertical_gap + row * (pdk.cell_height_um + vertical_gap)
+        row_origin_x = margin
+        row_pitch_x = (
+            0.0 if cells_this_row <= 1 else
+            math.floor((usable - pdk.cell_width_um) / (cells_this_row - 1) / pixel) * pixel
+        )
+        row_pitch_x = max(pdk.cell_width_um + pdk.min_spacing_um, row_pitch_x) if cells_this_row > 1 else 0.0
+        # Serpentine rows keep consecutive technology-mapped cells close:
+        # the end of one row sits beside the beginning of the next instead of
+        # creating a full-die flyback wire.
+        physical_column = column if row % 2 == 0 else cells_this_row - 1 - column
+        gate.x = row_origin_x + physical_column * row_pitch_x
+        gate.y = core_origin_y + row * pitch_y
         cell_boxes.append((gate.x, gate.y, gate.x + pdk.cell_width_um, gate.y + pdk.cell_height_um))
         cell, local_pins = _cell_shapes(gate, pdk)
         shapes.extend(cell)
@@ -257,13 +414,29 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
 
     package_points: dict[str, tuple[float, float]] = {}
     if netlist.package and netlist.package.name.startswith("DIE"):
+        pad_p = max(1, math.ceil(pdk.external_pad_size_um / pixel))
         for pin in netlist.pin_descriptors:
-            point = _die_pin_point(pin.number, netlist.package.pin_count, pdk)
-            package_points[pin.signal] = point
-            gx, gy = int(point[0] // pixel), int(point[1] // pixel)
-            shapes.append(Rect("metal1", gx * pixel, gy * pixel,
-                               (gx + 1) * pixel, (gy + 1) * pixel,
-                               f"PIN{pin.number}:{pin.signal}"))
+            edge_point = _die_pin_point(pin.number, netlist.package.pin_count, pdk)
+            gx, gy = int(edge_point[0] // pixel), int(edge_point[1] // pixel)
+            if gy == 0:  # top: PIN0 is centred here
+                x1p, y1p = max(0, min(pdk.image_width_px - pad_p, gx - pad_p // 2)), 0
+            elif gx == pdk.image_width_px - 1:  # right
+                x1p, y1p = pdk.image_width_px - pad_p, max(0, min(pdk.image_height_px - pad_p, gy - pad_p // 2))
+            elif gy == pdk.image_height_px - 1:  # bottom
+                x1p, y1p = max(0, min(pdk.image_width_px - pad_p, gx - pad_p // 2)), pdk.image_height_px - pad_p
+            else:  # left
+                x1p, y1p = 0, max(0, min(pdk.image_height_px - pad_p, gy - pad_p // 2))
+            # The global route lands inside the bond/probe pad, while the pad
+            # itself remains exactly flush with the die perimeter.
+            package_points[pin.signal] = (
+                (x1p + pad_p / 2) * pixel,
+                (y1p + pad_p / 2) * pixel,
+            )
+            shapes.append(Rect(
+                "metal1", x1p * pixel, y1p * pixel,
+                (x1p + pad_p) * pixel, (y1p + pad_p) * pixel,
+                f"PIN{pin.number}:{pin.signal}",
+            ))
 
     input_pitch = max(pdk.min_spacing_um + pdk.min_width_um, pdk.canvas_height_um // (len(netlist.inputs) + 1))
     for index, name in enumerate(netlist.inputs):
@@ -299,6 +472,7 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     pending.sort(key=lambda item: (
         0 if item[0] in {"$VDD", "$GND"} else 1,
         -fanout[item[0]],
+        tuple(-ord(char) for char in item[0]) if len(netlist.gates) <= 200 else (),
         -(abs(net_sources.get(item[0], item[1])[0] - item[1][0])
           + abs(net_sources.get(item[0], item[1])[1] - item[1][1])),
     ))
@@ -313,12 +487,38 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     # occupied when all lower legal planes fail, keeping ordinary designs
     # compressed to the smallest practical layer count.
     routing_layers = tuple(
-        f"metal{index}" for index in range(2, 25)
+        f"metal{index}" for index in range(2, pdk.max_routing_metal + 1)
         if f"metal{index}" in pdk.layers
     )
     occupied_by_layer: dict[str, dict[tuple[int, int], str]] = {
         layer: {} for layer in routing_layers
     }
+    # Incremental indices avoid rebuilding clearance halos and scanning every
+    # routed point for every sink. This changes runtime, not routing legality.
+    forbidden_by_layer: dict[str, dict[tuple[int, int], set[str]]] = {
+        layer: {} for layer in routing_layers
+    }
+    tree_by_layer_net: dict[str, dict[str, set[tuple[int, int]]]] = {
+        layer: {} for layer in routing_layers
+    }
+    points_by_layer: dict[str, set[tuple[int, int]]] = {
+        layer: set() for layer in routing_layers
+    }
+    # A via is conductive on its own mask too.  Keep an explicit clearance
+    # index so two otherwise legal routes cannot place unlike-net vias on
+    # touching pixels (a real short that metal-only occupancy cannot see).
+    via23_forbidden: dict[tuple[int, int], set[str]] = {}
+    # Keep local layer-change vias away from every fixed pin.  A later branch
+    # may have no freedom to move its endpoint via, whereas a bridge landing
+    # can always be shifted along the route.
+    fixed_pin_keepout: set[tuple[int, int]] = set()
+    fixed_points = list(net_sources.values()) + [destination for _, destination in pending]
+    pin_clearance = max(1, math.ceil(pdk.min_spacing_um / pixel))
+    for point_x, point_y in fixed_points:
+        gx, gy = int(point_x // pixel), int(point_y // pixel)
+        for ox in range(-pin_clearance, pin_clearance + 1):
+            for oy in range(-pin_clearance, pin_clearance + 1):
+                fixed_pin_keepout.add((gx + ox, gy + oy))
     net_layer: dict[str, str] = {}
     for route_index, (net, destination) in enumerate(pending):
         source = net_sources.get(net)
@@ -334,45 +534,151 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
         elif net == "$VDD":
             candidates = routing_layers
         elif net == "$GND":
-            candidates = tuple(reversed(routing_layers))
+            # Ground must obey the same low-to-high layer budget as every
+            # other net. The former reverse order forced even tiny designs
+            # directly onto metal24 and created a full wasteful via stack.
+            candidates = routing_layers
         else:
             candidates = routing_layers
         path = None
+        bridge_segments: list[tuple[str, list[tuple[int, int]]]] | None = None
+        bridge_vias: list[tuple[tuple[int, int], int]] = []
         chosen_layer = ""
         chosen_source = source
         for layer in candidates:
             occupied = occupied_by_layer[layer]
             trial_start = start_grid
-            same_net_tree = [point for point, owner in occupied.items() if owner == net]
+            same_net_tree = tree_by_layer_net[layer].get(net, ())
             if same_net_tree:
                 trial_start = min(
                     same_net_tree,
-                    key=lambda point: abs(point[0] - goal_grid[0]) + abs(point[1] - goal_grid[1]),
+                    key=lambda point: (
+                        abs(point[0] - goal_grid[0]) + abs(point[1] - goal_grid[1]),
+                        point[0], point[1],
+                    ),
                 )
-            trial = _astar_grid(trial_start, goal_grid, grid_width, grid_height,
-                                set(), occupied, net, clearance)
+            level = int(layer.removeprefix("metal"))
+            adjacent_occupied: set[tuple[int, int]] = set()
+            for other_level in (level - 1, level + 1):
+                other_layer = f"metal{other_level}"
+                if other_layer in occupied_by_layer:
+                    adjacent_occupied.update(
+                        points_by_layer[other_layer]
+                        - tree_by_layer_net[other_layer].get(net, set())
+                    )
+            trial = _astar_grid(
+                trial_start, goal_grid, grid_width, grid_height,
+                set(), occupied, net, clearance,
+                soft_occupied=adjacent_occupied,
+                soft_radius=pdk.interlayer_offset_p,
+                soft_penalty=pdk.coupling_penalty,
+                forbidden_owners=forbidden_by_layer[layer],
+            )
+            # Do not open a higher plane merely because the preferred
+            # inter-layer offset made this plane expensive. Prove the same
+            # layer cannot meet hard DRC before paying the new-layer cost.
+            if trial is None and adjacent_occupied:
+                trial = _astar_grid(
+                    trial_start, goal_grid, grid_width, grid_height,
+                    set(), occupied, net, clearance,
+                    forbidden_owners=forbidden_by_layer[layer],
+                )
+            if trial is None and layer == "metal2":
+                # Try short bridges on each overflow plane before moving the
+                # entire branch upstairs.  This makes added layers contain
+                # crossings only, instead of thousands of empty pixels around
+                # a full-length escape wire.
+                for bridge_layer in routing_layers[1:]:
+                    bridged = _local_bridge_route(
+                        trial_start, goal_grid, grid_width, grid_height, net,
+                        clearance, forbidden_by_layer["metal2"],
+                        forbidden_by_layer[bridge_layer], bridge_layer,
+                    )
+                    if bridged is None:
+                        continue
+                    trial_segments, trial_points = bridged
+                    endpoint_vias = []
+                    if trial_segments[0][0] != "metal2" and trial_start == start_grid:
+                        endpoint_vias.append(trial_start)
+                    if trial_segments[-1][0] != "metal2":
+                        endpoint_vias.append(goal_grid)
+                    all_trial_vias = trial_points + endpoint_vias
+                    if any(
+                        any(owner != net for owner in via23_forbidden.get(point, ()))
+                        for point in all_trial_vias
+                    ) or any(point in fixed_pin_keepout for point in trial_points):
+                        continue
+                    bridge_segments = trial_segments
+                    bridge_level = int(bridge_layer.removeprefix("metal"))
+                    bridge_vias = [(point, bridge_level) for point in trial_points]
+                    chosen_layer = "metal2"
+                    chosen_source = ((trial_start[0] + 0.5) * pixel,
+                                     (trial_start[1] + 0.5) * pixel)
+                    break
+                if bridge_segments is not None:
+                    break
             if trial is not None:
                 path, chosen_layer = trial, layer
                 chosen_source = ((trial_start[0] + 0.5) * pixel,
                                  (trial_start[1] + 0.5) * pixel)
                 break
-        if path is None:
+        if path is None and bridge_segments is None:
             unrouted.append(f"{net}: no p-grid path from {source} to {destination}")
             continue
         net_layer[net] = chosen_layer
-        shapes.extend(_path_rects(path, pixel, net, chosen_layer))
+        routed_segments = bridge_segments or [(chosen_layer, path)]
+        for segment_layer, segment_path in routed_segments:
+            shapes.extend(_path_rects(segment_path, pixel, net, segment_layer))
         # Vias are emitted at real cell/pad endpoints. Branches that begin on an
         # existing same-net tree need only the destination via.
         via_points = [goal_grid] if chosen_source != source else [start_grid, goal_grid]
-        for vx, vy in via_points:
-            target_level = int(chosen_layer.removeprefix("metal"))
+        endpoint_layers = [routed_segments[-1][0]] if chosen_source != source else [
+            routed_segments[0][0], routed_segments[-1][0]
+        ]
+        for (vx, vy), endpoint_layer in zip(via_points, endpoint_layers):
+            target_level = int(endpoint_layer.removeprefix("metal"))
             via_layers = tuple(f"via{level}{level + 1}" for level in range(1, target_level))
             for via_layer in via_layers:
                 shapes.append(Rect(via_layer, vx * pixel, vy * pixel,
                                    (vx + 1) * pixel, (vy + 1) * pixel, net))
-        for point in path:
-            occupied_by_layer[chosen_layer][point] = net
+                if via_layer == "via23":
+                    for ox in range(-clearance, clearance + 1):
+                        for oy in range(-clearance, clearance + 1):
+                            via23_forbidden.setdefault((vx + ox, vy + oy), set()).add(net)
+        for (vx, vy), bridge_level in bridge_vias:
+            for level in range(2, bridge_level):
+                via_layer = f"via{level}{level + 1}"
+                shapes.append(Rect(via_layer, vx * pixel, vy * pixel,
+                                   (vx + 1) * pixel, (vy + 1) * pixel, net))
+            for ox in range(-clearance, clearance + 1):
+                for oy in range(-clearance, clearance + 1):
+                    via23_forbidden.setdefault((vx + ox, vy + oy), set()).add(net)
+        for segment_layer, segment_path in routed_segments:
+            layer_tree = tree_by_layer_net[segment_layer].setdefault(net, set())
+            layer_forbidden = forbidden_by_layer[segment_layer]
+            for point in segment_path:
+                occupied_by_layer[segment_layer][point] = net
+                points_by_layer[segment_layer].add(point)
+                layer_tree.add(point)
+                px, py = point
+                for ox in range(-clearance, clearance + 1):
+                    for oy in range(-clearance, clearance + 1):
+                        layer_forbidden.setdefault((px + ox, py + oy), set()).add(net)
         routes.append((net, chosen_source, destination))
+
+    # The greedy tree router may revisit a branch endpoint. One physical via
+    # at one coordinate is sufficient for a net, so remove exact duplicates
+    # before DRC, mask export and parasitic extraction.
+    unique_shapes: list[Rect] = []
+    seen_vias: set[tuple[str, float, float, float, float, str]] = set()
+    for shape in shapes:
+        if shape.layer.startswith("via"):
+            key = (shape.layer, shape.x1, shape.y1, shape.x2, shape.y2, shape.label)
+            if key in seen_vias:
+                continue
+            seen_vias.add(key)
+        unique_shapes.append(shape)
+    shapes = unique_shapes
 
     rows = math.ceil(max(1, len(netlist.gates)) / per_row)
     used_height = margin + rows * (pdk.cell_height_um + pdk.row_spacing_um)
@@ -427,6 +733,14 @@ def run_drc(layout: Layout, pdk: PDK) -> list[str]:
             if abs(units - round(units)) > epsilon:
                 errors.append(f"E_OFFGRID shape {index} ({shape.layer}): {coordinate} um")
                 break
+    pads = [shape for shape in layout.shapes
+            if shape.layer == "metal1" and shape.label.startswith("PIN")]
+    for index, first in enumerate(pads):
+        for second in pads[index + 1:]:
+            overlap_x = min(first.x2, second.x2) - max(first.x1, second.x1)
+            overlap_y = min(first.y2, second.y2) - max(first.y1, second.y1)
+            if overlap_x > epsilon and overlap_y > epsilon:
+                errors.append(f"E_PAD_OVERLAP {first.label} overlaps {second.label}")
     for net, source, sink in layout.routes:
         if not _route_is_connected(layout, net, source, sink):
             errors.append(f"E_CONNECT {net}: {source} does not reach {sink}")

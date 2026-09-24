@@ -28,6 +28,18 @@ class PDK:
     rram_cell_width_p: int
     rram_cell_height_p: int
     rram_bits_per_zno: int
+    wire_capacitance_ff_per_p: float
+    via_capacitance_ff: float
+    coupling_penalty: int
+    interlayer_offset_p: int
+    max_net_capacitance_ff: float
+    max_bus_skew_p: int
+    layer_activation_penalty: int
+    via_penalty: int
+    external_pad_size_um: float
+    max_routing_metal: int
+    target_channel_utilization: float
+    min_channel_utilization_before_layer: float
 
     @classmethod
     def load(cls, path: str | Path) -> "PDK":
@@ -59,4 +71,16 @@ class PDK:
             rram_cell_width_p=int(data.get("rram_cell_width_p", 3)),
             rram_cell_height_p=int(data.get("rram_cell_height_p", 3)),
             rram_bits_per_zno=int(data.get("rram_bits_per_zno", 1)),
+            wire_capacitance_ff_per_p=float(data.get("wire_capacitance_ff_per_p", 0.02)),
+            via_capacitance_ff=float(data.get("via_capacitance_ff", 0.05)),
+            coupling_penalty=int(data.get("coupling_penalty", 6)),
+            interlayer_offset_p=int(data.get("interlayer_offset_p", 2)),
+            max_net_capacitance_ff=float(data.get("max_net_capacitance_ff", 500.0)),
+            max_bus_skew_p=int(data.get("max_bus_skew_p", 5000)),
+            layer_activation_penalty=int(data.get("layer_activation_penalty", 25000)),
+            via_penalty=int(data.get("via_penalty", 40)),
+            external_pad_size_um=float(data.get("external_pad_size_um", 101.6)),
+            max_routing_metal=int(data.get("max_routing_metal", 10)),
+            target_channel_utilization=float(data.get("target_channel_utilization", 0.80)),
+            min_channel_utilization_before_layer=float(data.get("min_channel_utilization_before_layer", 0.60)),
         )
