@@ -1,0 +1,41 @@
+package DIE16(required="0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15");
+
+pin A0(PIN=0, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin A1(PIN=1, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin A2(PIN=2, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin A3(PIN=3, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin B0(PIN=4, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin B1(PIN=5, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin B2(PIN=6, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin B3(PIN=7, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin OP0(PIN=8, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin OP1(PIN=9, TYPE=INPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin Y0(PIN=10, TYPE=OUTPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin Y1(PIN=11, TYPE=OUTPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin Y2(PIN=12, TYPE=OUTPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin Y3(PIN=13, TYPE=OUTPUT, V_RANGE="0~0.8V", LOGIC0="0~0.1V", LOGIC1="0.7~0.8V");
+pin VDD08(PIN=14, TYPE=POWER, V_RANGE="0.75~0.85V", NOMINAL=0.8V);
+pin GND(PIN=15, TYPE=GND, V_RANGE="0~0V", NOMINAL=0V);
+
+power CORE_08(VOLTAGE=0.8V, SOURCE=VDD08, PRIMITIVE=DIRECT);
+voltage core(vdd=0.8, high=0.7, low=0.1);
+
+module alu4_compact(
+ input wire A0, input wire A1, input wire A2, input wire A3,
+ input wire B0, input wire B1, input wire B2, input wire B3,
+ input wire OP0, input wire OP1,
+ output wire Y0, output wire Y1, output wire Y2, output wire Y3
+);
+ wire N0,N1;
+ wire X0,X1,X2,X3,AN0,AN1,AN2,AN3,OR0,OR1,OR2,OR3;
+ wire L00,L01,L02,L03,L10,L11,L12,L13;
+ assign N0=~OP0; assign N1=~OP1;
+ assign X0=A0^B0; assign AN0=A0&B0; assign OR0=A0|B0;
+ assign L00=(N0&X0)|(OP0&AN0); assign L10=(N0&OR0)|(OP0&A0); assign Y0=(N1&L00)|(OP1&L10);
+ assign X1=A1^B1; assign AN1=A1&B1; assign OR1=A1|B1;
+ assign L01=(N0&X1)|(OP0&AN1); assign L11=(N0&OR1)|(OP0&A1); assign Y1=(N1&L01)|(OP1&L11);
+ assign X2=A2^B2; assign AN2=A2&B2; assign OR2=A2|B2;
+ assign L02=(N0&X2)|(OP0&AN2); assign L12=(N0&OR2)|(OP0&A2); assign Y2=(N1&L02)|(OP1&L12);
+ assign X3=A3^B3; assign AN3=A3&B3; assign OR3=A3|B3;
+ assign L03=(N0&X3)|(OP0&AN3); assign L13=(N0&OR3)|(OP0&A3); assign Y3=(N1&L03)|(OP1&L13);
+endmodule
