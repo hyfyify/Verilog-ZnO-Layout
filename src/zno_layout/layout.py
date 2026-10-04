@@ -362,6 +362,71 @@ def _die_pin_point(number: int, count: int, pdk: PDK) -> tuple[float, float]:
     return ((gx + 0.5) * pixel, (gy + 0.5) * pixel)
 
 
+def _compact_unused_top_planes(shapes: list[Rect]) -> list[Rect]:
+    """Fold a sparse top plane down when the complete plane is legally movable.
+
+    This is a conservative post-route compactor: it never moves only half a
+    branch, and it accepts a fold only when no unlike-net geometry on the
+    target plane touches. Existing via stacks preserve electrical continuity;
+    the now-unused top via mask is removed.
+    """
+    result = list(shapes)
+    while True:
+        levels = sorted({
+            int(shape.layer.removeprefix("metal"))
+            for shape in result
+            if shape.layer.startswith("metal")
+            and int(shape.layer.removeprefix("metal")) >= 3
+        })
+        if not levels:
+            break
+        top = levels[-1]
+        source_layer = f"metal{top}"
+        moving = [shape for shape in result if shape.layer == source_layer]
+
+        def touches(a: Rect, b: Rect) -> bool:
+            return (a.x1 <= b.x2 and b.x1 <= a.x2
+                    and a.y1 <= b.y2 and b.y1 <= a.y2)
+
+        trial = [shape for shape in result if shape.layer != source_layer]
+        groups: dict[str, list[Rect]] = {}
+        for shape in moving:
+            groups.setdefault(shape.label, []).append(shape)
+        # Large groups have fewer placement choices, so assign them first.
+        ordered = sorted(
+            groups.items(),
+            key=lambda item: sum(shape.width + shape.height for shape in item[1]),
+            reverse=True,
+        )
+        complete = True
+        for label, group in ordered:
+            placed = False
+            for target in range(2, top):
+                target_layer = f"metal{target}"
+                candidates = [
+                    Rect(target_layer, s.x1, s.y1, s.x2, s.y2, label)
+                    for s in group
+                ]
+                fixed = [shape for shape in trial if shape.layer == target_layer]
+                if any(
+                    candidate.label != obstacle.label and touches(candidate, obstacle)
+                    for candidate in candidates for obstacle in fixed
+                ):
+                    continue
+                trial.extend(candidates)
+                placed = True
+                break
+            if not placed:
+                complete = False
+                break
+        if not complete:
+            break
+        result = trial
+        obsolete_via = f"via{top - 1}{top}"
+        result = [shape for shape in result if shape.layer != obsolete_via]
+    return result
+
+
 def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
     pixel = pdk.pixel_pitch_um
     clearance_um = max(pdk.min_spacing_um, pixel)
@@ -678,7 +743,7 @@ def place_and_route(netlist: Netlist, pdk: PDK) -> Layout:
                 continue
             seen_vias.add(key)
         unique_shapes.append(shape)
-    shapes = unique_shapes
+    shapes = _compact_unused_top_planes(unique_shapes)
 
     rows = math.ceil(max(1, len(netlist.gates)) / per_row)
     used_height = margin + rows * (pdk.cell_height_um + pdk.row_spacing_um)

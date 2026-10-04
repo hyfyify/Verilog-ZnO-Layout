@@ -7,9 +7,16 @@ from pathlib import Path
 from zno_layout.cli import compile_design
 from zno_layout.extensions import parse_extensions
 from zno_layout.electrical import SynthesisError, parse_electrical, validate_and_adapt
-from zno_layout.layout import _astar_grid, _cell_shapes, _touches, place_and_route, run_drc
+from zno_layout.layout import (
+    _astar_grid,
+    _cell_shapes,
+    _compact_unused_top_planes,
+    _touches,
+    place_and_route,
+    run_drc,
+)
 from zno_layout.layout import _rram_shapes
-from zno_layout.model import Gate
+from zno_layout.model import Gate, Rect
 from zno_layout.pdk import PDK
 from zno_layout.physical import analyze_physical, physical_drc, scan_routing_layers
 from zno_layout.techmap import expand_to_nmos_primitives, prune_unused_logic
@@ -203,6 +210,17 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(metrics.layer_utilization)
         self.assertEqual(physical_drc(metrics, pdk), [])
         self.assertEqual(scan_routing_layers(layout, pdk), [])
+
+    def test_post_route_compactor_removes_a_legally_empty_top_mask(self):
+        shapes = [
+            Rect("metal2", 0, 0, 10, 1, "fixed"),
+            Rect("metal4", 20, 20, 30, 21, "movable"),
+            Rect("via34", 20, 20, 21, 21, "movable"),
+        ]
+        compacted = _compact_unused_top_planes(shapes)
+        self.assertNotIn("metal4", {shape.layer for shape in compacted})
+        self.assertNotIn("via34", {shape.layer for shape in compacted})
+        self.assertIn("metal2", {shape.layer for shape in compacted})
 
     def test_all_metal_edges_are_on_pixel_grid(self):
         pdk = PDK.load(ROOT / "pdk/default.json")
